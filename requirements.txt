@@ -1,0 +1,9 @@
+streamlit
+pandas
+google-generativeai
+pinecone
+langchain-google-genai
+langchain-pinecone
+gspread
+oauth2client
+python-dotenv
