@@ -34,6 +34,9 @@ def save_to_log(user_input, ai_response, recommended_books):
         # 1. 從 Secrets 讀取那串長文字
         creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
 
+        # 修正：如果字串前後有空格或換行，先把它們去掉
+        creds_info = json.loads(creds_json_str.strip())
+
         # 2. 將文字轉成 Python 字典 (這步能解決之前的 'str' object 錯誤)
         creds_info = json.loads(creds_json_str)
 
