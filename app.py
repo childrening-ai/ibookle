@@ -67,25 +67,26 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* 1. 隱藏頂部選單、右下角 Made with Streamlit 標籤 */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* 隱藏所有選單、標籤與底部工具欄 */
+    #MainMenu, footer, header {visibility: hidden; height: 0;}
     
-    /* 2. 徹底移除畫面最下方的「Built with Streamlit」橫槓 */
-    div[data-testid="stStatusWidget"] {
-        display: none;
+    /* 針對嵌入模式下的 StatusWidget (包含 Built with Streamlit 的那一條) */
+    div[data-testid="stStatusWidget"], 
+    .stAppViewFooter, 
+    [data-testid="stDecoration"],
+    [data-testid="stHeader"] {
+        display: none !important;
     }
 
-    /* 3. 隱藏嵌入模式下可能出現的浮動工具列 */
-    .stAppToolbar {
-        display: none;
-    }
-
-    /* 4. 調整容器間距，消除底部多餘的空白 */
+    /* 移除底部多餘的 Padding */
     .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 0rem;
+        padding-bottom: 0px !important;
+        margin-bottom: -50px !important;
+    }
+
+    /* 隱藏右下角的 Fullscreen 圖示 */
+    button[title="View fullscreen"] {
+        display: none !important;
     }
     </style>
     """, unsafe_allow_html=True)
