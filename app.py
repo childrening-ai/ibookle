@@ -1,4 +1,5 @@
 import streamlit as st
+from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import os
 import datetime
@@ -26,9 +27,12 @@ llm_model = genai.GenerativeModel('gemini-2.0-flash')
 # --- Google Sheets 紀錄功能 ---
 def save_to_log(user_input, ai_response, recommended_books):
     try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        # 本地測試時需確保 google_creds.json 存在
-        creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
+        
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+
+        # 直接從 Streamlit 的 Secrets 讀取字典，不再需要外部檔案
+        creds_info = st.secrets["GOOGLE_CREDENTIALS"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         sheet = client.open("AI_User_Logs").sheet1
         
