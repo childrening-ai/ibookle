@@ -67,24 +67,26 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* 1. 隱藏頂部選單、右下角 Made with Streamlit 以及標題欄 */
+    /* 1. 隱藏頂部選單、右下角 Made with Streamlit 標籤 */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* 2. 移除最下方的空白間距 (Padding) */
-    .block-container {
-        padding-top: 0rem;
-        padding-bottom: 0rem;
+    /* 2. 徹底移除畫面最下方的「Built with Streamlit」橫槓 */
+    div[data-testid="stStatusWidget"] {
+        display: none;
     }
 
-    /* 3. 讓嵌入的邊框完全貼合 */
-    iframe {
-        border-radius: 0px;
+    /* 3. 隱藏嵌入模式下可能出現的浮動工具列 */
+    .stAppToolbar {
+        display: none;
     }
-    
-    /* 4. 如果你想把那個紅色的錯誤訊息或提示也美化（選配） */
-    .stDeployButton {display:none;}
+
+    /* 4. 調整容器間距，消除底部多餘的空白 */
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 0rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
