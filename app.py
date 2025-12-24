@@ -105,25 +105,29 @@ st.markdown("""
         box-shadow: none !important;
     }
 
-    /* 1. 移除最外層所有可能的邊框與陰影 */
+    /* 1. 徹底拔除所有層級的陰影與邊框 */
     [data-testid="stAppViewContainer"], 
-    [data-testid="stAppViewBlockContainer"],
-    .main {
+    [data-testid="stAppViewBlockContainer"], 
+    .stApp, .main, .block-container {
         border: none !important;
         box-shadow: none !important;
-        background-color: transparent !important;
+        outline: none !important;
     }
 
-    /* 2. 針對嵌入模式下，Streamlit 自動加上的卡片邊框 */
-    .stApp {
+    /* 2. 針對嵌入模式下最頑固的「白色卡片」邊緣 */
+    div[class*="st-emotion-cache"] {
+        box-shadow: none !important;
         border: none !important;
     }
 
-    /* 3. 移除頂部與底部的多餘空白，讓它貼齊 */
-    .block-container {
-        padding-top: 0rem !important;
-        padding-bottom: 0rem !important;
-        max-width: 100% !important;
+    /* 3. 移除頂部 header 的底線 */
+    header {
+        border-bottom: none !important;
+    }
+
+    /* 4. 確保背景透明度，消除色差造成的「偽線條」 */
+    .stAppViewMain {
+        background-color: transparent !important;
     }
     
     </style>
