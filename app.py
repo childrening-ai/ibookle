@@ -88,6 +88,23 @@ st.markdown("""
     button[title="View fullscreen"] {
         display: none !important;
     }
+
+    /* 移除外層容器的邊框與陰影 */
+    [data-testid="stAppViewContainer"] {
+        border: none !important;
+    }
+    
+    /* 移除主要的區塊間隙與可能的細線 */
+    .main {
+        background-color: transparent !important;
+    }
+    
+    /* 針對嵌入模式下的特定容器進行邊框消除 */
+    div[class*="stApp"] {
+        border: none !important;
+        box-shadow: none !important;
+    }
+    
     </style>
     """, unsafe_allow_html=True)
 
