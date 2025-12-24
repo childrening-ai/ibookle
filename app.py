@@ -1,4 +1,5 @@
 import streamlit as st
+import json  # 必須多匯入這個庫
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import os
@@ -30,14 +31,23 @@ def save_to_log(user_input, ai_response, recommended_books):
         
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
 
-        # 直接從 Streamlit 的 Secrets 讀取字典，不再需要外部檔案
-        creds_info = st.secrets["GOOGLE_CREDENTIALS"]
+        # 1. 從 Secrets 讀取那串長文字
+        creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
+
+        # 2. 將文字轉成 Python 字典 (這步能解決之前的 'str' object 錯誤)
+        creds_info = json.loads(creds_json_str)
+
+        # 3. 使用 dict 方式讀取
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        
         client = gspread.authorize(creds)
+        
         sheet = client.open("AI_User_Logs").sheet1
         
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([now, user_input, ai_response, recommended_books])
+    
     except Exception as e:
         st.error(f"⚠️ Log 紀錄失敗: {e}")
 
