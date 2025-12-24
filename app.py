@@ -104,6 +104,27 @@ st.markdown("""
         border: none !important;
         box-shadow: none !important;
     }
+
+    /* 1. 移除最外層所有可能的邊框與陰影 */
+    [data-testid="stAppViewContainer"], 
+    [data-testid="stAppViewBlockContainer"],
+    .main {
+        border: none !important;
+        box-shadow: none !important;
+        background-color: transparent !important;
+    }
+
+    /* 2. 針對嵌入模式下，Streamlit 自動加上的卡片邊框 */
+    .stApp {
+        border: none !important;
+    }
+
+    /* 3. 移除頂部與底部的多餘空白，讓它貼齊 */
+    .block-container {
+        padding-top: 0rem !important;
+        padding-bottom: 0rem !important;
+        max-width: 100% !important;
+    }
     
     </style>
     """, unsafe_allow_html=True)
