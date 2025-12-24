@@ -59,7 +59,24 @@ def get_recommendations(user_query):
 
 # ================= 3. Streamlit UI 介面 =================
 
-st.set_page_config(page_title="ibookle - 聰明的共讀選書專家", page_icon="📚")
+st.set_page_config(
+    page_title="ibookle",
+    layout="wide",                # 讓內容填滿寬度
+    initial_sidebar_state="collapsed"  # 自動把左邊那塊深色的收起來
+)
+
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    /* 移除頂部空白 */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 st.title("💡 ibookle")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
