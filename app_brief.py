@@ -31,7 +31,7 @@ def update_log_feedback(row_index, score):
         creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
         creds_info = json.loads(creds_json_str.strip())
         client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds_info, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']))
-        sheet = client.open("AI_User_Logs").sheet1
+        sheet = client.open("AI_User_Logs").worksheets("Brief_Logs")
         feedback_text = "👍" if score == 1 else "👎"
         sheet.update_cell(row_index, 5, feedback_text)
     except: pass

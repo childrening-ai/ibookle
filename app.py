@@ -30,7 +30,7 @@ def save_to_log_chat(user_input, ai_response, recommended_books):
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         # 請確保 Google Sheet 第一個分頁有 6 欄：Time, SessionID, Input, AI, Books, Feedback
-        sheet = client.open("AI_User_Logs").sheet1
+        sheet = client.open("AI_User_Logs").worksheet("Dialogue_Logs")
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row = [now, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
         sheet.append_row(row)
