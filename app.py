@@ -41,7 +41,6 @@ def save_to_log(user_input, ai_response, recommended_books):
         return None
 
 def update_log_feedback():
-    """當 st.feedback 狀態改變時觸發"""
     row_idx = st.session_state.last_row_idx
     if row_idx:
         score = st.session_state.get(f"fb_key_{row_idx}")
@@ -50,7 +49,6 @@ def update_log_feedback():
                 sheet = get_google_sheet()
                 feedback_text = "👍" if score == 1 else "👎"
                 sheet.update_cell(row_idx, 6, feedback_text)
-                # 標記已成功提交回饋，用於顯示 UI 提示
                 st.session_state[f"submitted_{row_idx}"] = True
             except Exception as e:
                 pass
@@ -66,22 +64,27 @@ st.set_page_config(page_title="ibookle", layout="wide")
 
 st.markdown("""
     <style>
+    /* 1. 隱藏頂部與底部雜訊 */
     #MainMenu, footer, header {visibility: hidden; height: 0;}
     div[data-testid="stStatusWidget"], .stAppViewFooter, [data-testid="stDecoration"], [data-testid="stHeader"] {display: none !important;}
     
+    /* 2. 背景與容器調整 */
     html, body, [data-testid="stAppViewContainer"] {
         overflow: visible !important; 
         height: auto !important; 
         background-color: white !important;
     }
     
-    .main .block-container { padding: 1.5rem 1.5rem 5rem 1.5rem !important; }
+    .main .block-container { 
+        padding: 1.5rem 1.5rem 5rem 1.5rem !important; 
+        max-width: 900px !important;
+    }
 
-    /* --- 強力消除綠框與藍框 --- */
-    /* 針對所有層級的 border 和 box-shadow 進行強制重置 */
-    div[data-baseweb="input"], .stTextInput div {
-        border-color: transparent !important;
+    /* 3. 強力消除綠框與藍框 (對主內容與側邊欄同時有效) */
+    div[data-baseweb="input"] {
+        border: none !important;
         box-shadow: none !important;
+        outline: none !important;
     }
     
     .stTextInput input {
@@ -90,13 +93,20 @@ st.markdown("""
         background-color: white !important;
     }
 
-    /* 聚焦時使用橘色邊框，完全取代綠色 */
     .stTextInput input:focus {
         border-color: #D35400 !important;
-        box-shadow: 0 0 0 2px rgba(211, 84, 0, 0.2) !important;
+        box-shadow: 0 0 0 2px rgba(211, 84, 0, 0.1) !important;
         outline: none !important;
     }
 
+    /* 4. 分隔線 (灰線) 樣式穩定化 */
+    hr {
+        margin-top: 2rem !important;
+        margin-bottom: 2rem !important;
+        border-bottom: 1px solid #EAECEE !important;
+    }
+
+    /* 5. 專家引言框 */
     .expert-box {
         margin: 20px 0;
         padding: 15px;
@@ -106,11 +116,46 @@ st.markdown("""
         color: #5D6D7E;
         line-height: 1.8;
     }
+    
+    /* 6. 側邊欄專屬樣式 */
+    [data-testid="stSidebar"] {
+        background-color: #FDFEFE;
+        border-right: 1px solid #F4F6F7;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- UI 呈現層 ---
-st.title("💡 ibookle")
+# ================= 4. 側邊欄配置 =================
+
+with st.sidebar:
+    st.markdown("## 💡 ibookle 簡介")
+    st.info("ibookle 是一個專為家長設計的選書工具，為孩子不同成長階段的挑戰，精選最適合的繪本陪伴。")
+    
+    st.divider()
+    
+    st.markdown("### 📋 問卷回饋")
+    st.warning("歡迎分享您的使用感受，您的建議是 ibookle 成長的動力！")
+    st.link_button("👉 填寫體驗問卷", "https://your-survey-link.com", use_container_width=True)
+    
+    st.divider()
+    
+    st.markdown("### ⚡ 服務狀態")
+    # 狀態燈號控制
+    db_status = "green" 
+    
+    if db_status == "green":
+        st.success("🟢 資料庫：正常運作")
+    elif db_status == "yellow":
+        st.warning("🟡 資料庫：負載較高")
+    else:
+        st.error("🔴 資料庫：維護中")
+    
+    st.caption(f"Session: {st.session_state.session_id}")
+    st.caption("© 2026 ibookle")
+
+# ================= 5. 主內容區 =================
+
+st.title("💡 ibookle 繪本共讀專家")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
 
 user_query = st.text_input("", placeholder="🔍 輸入孩子的狀況...", key="main_search")
@@ -139,7 +184,6 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
             st.session_state.prev_query = user_query
             st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
 
-# 渲染搜尋結果
 if st.session_state.search_results:
     res = st.session_state.search_results
     st.markdown(f'<div class="expert-box">{res["ai_response"]}</div>', unsafe_allow_html=True)
@@ -154,23 +198,15 @@ if st.session_state.search_results:
             with st.expander("🔍 專家詳細導讀"):
                 st.write(b['Refine_Content'])
                 if b['Link']: st.link_button("🛒 前往購書", b['Link'])
+        # 這裡會產生之前的灰線 (st.divider 效果相同)
         st.write("")
+        st.divider() 
 
-    # 回饋機制
-    row_idx = st.session_state.last_row_idx
-    if row_idx:
-        st.divider()
+    if st.session_state.last_row_idx:
         st.write("📢 **滿意這次的建議嗎？**")
-        st.feedback(
-            "thumbs", 
-            key=f"fb_key_{row_idx}", 
-            on_change=update_log_feedback
-        )
-        # 如果 callback 標記了已提交，則顯示泡泡或文字
-        if st.session_state.get(f"submitted_{row_idx}"):
+        st.feedback("thumbs", key=f"fb_key_{st.session_state.last_row_idx}", on_change=update_log_feedback)
+        if st.session_state.get(f"submitted_{st.session_state.last_row_idx}"):
             st.toast("感謝您的回饋！", icon="❤️")
-            st.success("感謝您的回饋！") # 增加文字提示，防止泡泡沒看到
+            st.success("感謝您的回饋！")
 else:
     st.info("👋 你好！我是你的共讀專家。在上方輸入框描述狀況，我會為您推薦最適合的書單。")
-
-st.caption("© 2026 ibookle")
