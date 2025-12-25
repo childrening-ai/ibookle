@@ -1,5 +1,6 @@
 import streamlit as st
 import json, os, datetime, gspread, uuid
+import pytz # 處理台灣時區
 from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -11,7 +12,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 llm_model = genai.GenerativeModel('gemini-2.0-flash')
 
-# 初始化 Session 狀態，確保按讚後內容不消失
+# 初始化 Session 狀態
 if "session_id" not in st.session_state: 
     st.session_state.session_id = str(uuid.uuid4())[:8]
 if "last_row_idx" not in st.session_state: 
@@ -22,20 +23,24 @@ if "search_results" not in st.session_state:
 # ================= 2. 功能函數定義 =================
 
 def get_google_sheet():
-    """連線並開啟指定的分頁 Dialogue_Logs"""
+    """連線並開啟指定的 Brief_Logs 分頁"""
     creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
     creds_info = json.loads(creds_json_str.strip())
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
     client = gspread.authorize(creds)
-    return client.open("AI_User_Logs").worksheet("Dialogue_Logs")
+    # 修改：指定開啟 Brief_Logs
+    return client.open("AI_User_Logs").worksheet("Brief_Logs")
 
 def save_to_log(user_input, ai_response, recommended_books):
     try:
         sheet = get_google_sheet()
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # 標題欄順序：Time, SessionID, Input, AI, Books, Feedback
-        new_row = [now_str, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
+        # 轉換為台灣時間
+        tw_tz = pytz.timezone('Asia/Taipei')
+        now_tw = datetime.datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 欄位順序：Time, SessionID, Input, AI, Books, Feedback
+        new_row = [now_tw, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
         sheet.append_row(new_row)
         return len(sheet.get_all_values())
     except Exception as e:
@@ -52,17 +57,8 @@ def update_log_feedback(row_index, score):
         print(f"Feedback Error: {e}")
 
 def get_recommendations(user_query):
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-001", 
-        google_api_key=os.getenv("GOOGLE_API_KEY"), 
-        task_type="retrieval_query", 
-        output_dimensionality=768
-    )
-    vectorstore = PineconeVectorStore(
-        index_name="gemini768", 
-        embedding=embeddings, 
-        pinecone_api_key=os.getenv("PINECONE_API_KEY")
-    )
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=os.getenv("GOOGLE_API_KEY"), task_type="retrieval_query", output_dimensionality=768)
+    vectorstore = PineconeVectorStore(index_name="gemini768", embedding=embeddings, pinecone_api_key=os.getenv("PINECONE_API_KEY"))
     return vectorstore.similarity_search(user_query, k=5)
 
 # ================= 3. 介面設計與 CSS =================
@@ -86,10 +82,15 @@ st.markdown("""
         max-width: 95% !important;
     }
 
-    /* 頂部搜尋框美化 */
+    /* 徹底消除輸入框聚焦時的綠框，保持橘色風格 */
     .stTextInput input {
         border: 2px solid #E67E22 !important; 
         border-radius: 25px !important;
+    }
+    .stTextInput input:focus {
+        border: 2px solid #D35400 !important; 
+        box-shadow: none !important; 
+        outline: none !important;
     }
 
     .expert-box {
@@ -108,7 +109,6 @@ st.markdown("""
 st.title("💡 ibookle")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
 
-# 搜尋輸入框
 user_query = st.text_input("", placeholder="🔍 輸入孩子的狀況（例如：不愛收玩具、害怕看醫生...）")
 
 if user_query:
@@ -119,12 +119,9 @@ if user_query:
             st.warning("查無相關書籍，請換個關鍵字試試看。")
         else:
             titles_str = ", ".join([d.metadata.get('Title','未知') for d in results])
-            
-            # 生成 AI 回應
             prompt = f"使用者問題：{user_query}\n相關書籍：{titles_str}\n請以親子專家口吻簡述選書理由，不使用表情符號，約150字。"
             ai_response = llm_model.generate_content(prompt).text
             
-            # 存入 Session 狀態以保持持久顯示
             st.session_state.search_results = {
                 "ai_response": ai_response,
                 "books": [
@@ -139,15 +136,12 @@ if user_query:
                 ],
                 "titles_str": titles_str
             }
-            
-            # 紀錄 Log
+            # 儲存 Log 並回傳行號
             st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
 
-# 顯示結果
+# 渲染搜尋結果
 if st.session_state.search_results:
     res = st.session_state.search_results
-    
-    # 專家引言
     st.markdown(f'<div class="expert-box">{res["ai_response"]}</div>', unsafe_allow_html=True)
     
     st.markdown("### 📖 精選推薦")
@@ -160,13 +154,13 @@ if st.session_state.search_results:
             with st.expander("🔍 專家詳細導讀"):
                 st.write(b['Refine_Content'])
                 if b['Link']: st.link_button("🛒 前往購書", b['Link'])
-        st.write("") # 間隔
+        st.write("")
 
-    # 回饋機制
+    # 回饋機制 (加上 Row ID 以確保狀態穩定)
     if st.session_state.last_row_idx:
         st.divider()
         st.write("📢 **滿意這次的建議嗎？**")
-        fb = st.feedback("thumbs", key=f"fb_{st.session_state.last_row_idx}")
+        fb = st.feedback("thumbs", key=f"fb_brief_{st.session_state.last_row_idx}")
         if fb is not None:
             update_log_feedback(st.session_state.last_row_idx, fb)
             st.toast("感謝您的回饋！", icon="❤️")
