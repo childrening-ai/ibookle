@@ -1,6 +1,6 @@
 import streamlit as st
 import json, os, datetime, gspread, uuid
-import pytz # 處理台灣時區
+import pytz 
 from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -23,38 +23,39 @@ if "search_results" not in st.session_state:
 # ================= 2. 功能函數定義 =================
 
 def get_google_sheet():
-    """連線並開啟指定的 Brief_Logs 分頁"""
     creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
     creds_info = json.loads(creds_json_str.strip())
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
     client = gspread.authorize(creds)
-    # 修改：指定開啟 Brief_Logs
     return client.open("AI_User_Logs").worksheet("Brief_Logs")
 
 def save_to_log(user_input, ai_response, recommended_books):
     try:
         sheet = get_google_sheet()
-        # 轉換為台灣時間
         tw_tz = pytz.timezone('Asia/Taipei')
         now_tw = datetime.datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
         
-        # 欄位順序：Time, SessionID, Input, AI, Books, Feedback
         new_row = [now_tw, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
         sheet.append_row(new_row)
+        # 獲取最新行號
         return len(sheet.get_all_values())
     except Exception as e:
-        print(f"Log Error: {e}")
+        st.error(f"Log Error: {e}")
         return None
 
-def update_log_feedback(row_index, score):
-    try:
-        if not row_index: return
-        sheet = get_google_sheet()
-        feedback_text = "👍" if score == 1 else "👎"
-        sheet.update_cell(row_index, 6, feedback_text) 
-    except Exception as e:
-        print(f"Feedback Error: {e}")
+def update_log_feedback():
+    # 當 feedback 改變時觸發的 callback
+    if st.session_state.last_row_idx:
+        score = st.session_state.get(f"fb_key_{st.session_state.last_row_idx}")
+        if score is not None:
+            try:
+                sheet = get_google_sheet()
+                feedback_text = "👍" if score == 1 else "👎"
+                sheet.update_cell(st.session_state.last_row_idx, 6, feedback_text)
+                st.toast("感謝您的回饋！", icon="❤️")
+            except Exception as e:
+                print(f"Feedback Update Error: {e}")
 
 def get_recommendations(user_query):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=os.getenv("GOOGLE_API_KEY"), task_type="retrieval_query", output_dimensionality=768)
@@ -65,9 +66,9 @@ def get_recommendations(user_query):
 
 st.set_page_config(page_title="ibookle", layout="wide")
 
+# 強力消除綠框與藍框的 CSS
 st.markdown("""
     <style>
-    /* 隱藏原生組件 */
     #MainMenu, footer, header {visibility: hidden; height: 0;}
     div[data-testid="stStatusWidget"], .stAppViewFooter, [data-testid="stDecoration"], [data-testid="stHeader"] {display: none !important;}
     
@@ -77,19 +78,22 @@ st.markdown("""
         background-color: white !important;
     }
     
-    .main .block-container { 
-        padding: 1.5rem 1.5rem 5rem 1.5rem !important; 
-        max-width: 95% !important;
-    }
+    .main .block-container { padding: 1.5rem 1.5rem 5rem 1.5rem !important; }
 
-    /* 徹底消除輸入框聚焦時的綠框，保持橘色風格 */
+    /* 修正 3：強力移除所有狀態下的綠色框線 (focus, active, hover) */
     .stTextInput input {
         border: 2px solid #E67E22 !important; 
         border-radius: 25px !important;
     }
-    .stTextInput input:focus {
-        border: 2px solid #D35400 !important; 
-        box-shadow: none !important; 
+    /* 針對 Streamlit 的內層容器進行強制覆蓋 */
+    div[data-baseweb="input"] {
+        border: none !important;
+        box-shadow: none !important;
+        outline: none !important;
+    }
+    .stTextInput input:focus, .stTextInput input:active {
+        border-color: #D35400 !important;
+        box-shadow: 0 0 0 2px rgba(211, 84, 0, 0.2) !important; /* 改用淡橘色光暈代替綠光 */
         outline: none !important;
     }
 
@@ -109,15 +113,13 @@ st.markdown("""
 st.title("💡 ibookle")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
 
-user_query = st.text_input("", placeholder="🔍 輸入孩子的狀況（例如：不愛收玩具、害怕看醫生...）")
+# 使用 on_change 來處理搜尋，避免干擾回饋
+user_query = st.text_input("", placeholder="🔍 輸入孩子的狀況...", key="main_search")
 
-if user_query:
+if user_query and (not st.session_state.search_results or st.session_state.get("prev_query") != user_query):
     with st.spinner("專家選書中..."):
         results = get_recommendations(user_query)
-        
-        if not results:
-            st.warning("查無相關書籍，請換個關鍵字試試看。")
-        else:
+        if results:
             titles_str = ", ".join([d.metadata.get('Title','未知') for d in results])
             prompt = f"使用者問題：{user_query}\n相關書籍：{titles_str}\n請以親子專家口吻簡述選書理由，不使用表情符號，約150字。"
             ai_response = llm_model.generate_content(prompt).text
@@ -133,9 +135,9 @@ if user_query:
                         "Refine_Content": d.metadata.get('Refine_Content', '暫無導讀'),
                         "Link": d.metadata.get('Link', '')
                     } for d in results
-                ],
-                "titles_str": titles_str
+                ]
             }
+            st.session_state.prev_query = user_query
             # 儲存 Log 並回傳行號
             st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
 
@@ -156,14 +158,15 @@ if st.session_state.search_results:
                 if b['Link']: st.link_button("🛒 前往購書", b['Link'])
         st.write("")
 
-    # 回饋機制 (加上 Row ID 以確保狀態穩定)
+    # 修正點讚：使用 callback 確保點擊後立刻執行寫入，且 key 穩定
     if st.session_state.last_row_idx:
         st.divider()
         st.write("📢 **滿意這次的建議嗎？**")
-        fb = st.feedback("thumbs", key=f"fb_brief_{st.session_state.last_row_idx}")
-        if fb is not None:
-            update_log_feedback(st.session_state.last_row_idx, fb)
-            st.toast("感謝您的回饋！", icon="❤️")
+        st.feedback(
+            "thumbs", 
+            key=f"fb_key_{st.session_state.last_row_idx}", 
+            on_change=update_log_feedback
+        )
 else:
     st.info("👋 你好！我是你的共讀專家。在上方輸入框描述狀況，我會為您推薦最適合的書單。")
 
