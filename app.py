@@ -150,7 +150,7 @@ with st.sidebar:
     else:
         st.error("🔴 資料庫：維護中")
     
-    st.caption(f"Session: {st.session_state.session_id}")
+    # st.caption(f"Session: {st.session_state.session_id}")
     st.caption("© 2026 ibookle")
 
 # ================= 5. 主內容區 =================
