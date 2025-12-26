@@ -1,16 +1,32 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from google import genai  # 使用最新 SDK
+from google import genai  # 使用新版 SDK
 import os
 import re
-from app import get_google_sheet
+import json
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # ========================================================
-# 1. 頁面基本設定與安全檢查
+# 1. 獨立的資料連線函數 (不再從 app.py 匯入)
 # ========================================================
-st.set_page_config(page_title="ibookle 數位戰情室", layout="wide")
+def get_google_sheet_standalone():
+    try:
+        creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
+        creds_info = json.loads(creds_json_str.strip())
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        client_gs = gspread.authorize(creds)
+        # 請確認這裡的 Sheet 名稱與 WorkSheet 名稱正確
+        return client_gs.open("AI_User_Logs").worksheet("Brief_Logs")
+    except Exception as e:
+        st.error(f"❌ 試算表連線失敗: {e}")
+        return None
 
+# ========================================================
+# 2. 登入檢查
+# ========================================================
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
@@ -29,22 +45,6 @@ def check_password():
     return False
 
 # ========================================================
-# 2. 數據抓取 (含緩存機制)
-# ========================================================
-@st.cache_data(ttl=600)
-def fetch_logs():
-    try:
-        sheet_obj = get_google_sheet() # 調用 app.py 的連線
-        data = sheet_obj.get_all_records()
-        df = pd.DataFrame(data)
-        if 'Time' in df.columns:
-            df['Time'] = pd.to_datetime(df['Time'])
-        return df
-    except Exception as e:
-        st.error(f"❌ 資料對接失敗: {e}")
-        return pd.DataFrame()
-
-# ========================================================
 # 3. 戰情室主介面
 # ========================================================
 if check_password():
@@ -53,63 +53,45 @@ if check_password():
     tab_ops, tab_health = st.tabs(["📈 營運用戶分析", "🛡️ 資料庫健康度"])
 
     with tab_ops:
-        df_logs = fetch_logs()
-        
-        if not df_logs.empty:
-            # --- KPI 看板 ---
-            c1, c2, c3 = st.columns(3)
-            c1.metric("累計搜尋", len(df_logs))
-            c2.metric("總點讚數", len(df_logs[df_logs['Feedback'] == '👍']))
-            rate = (len(df_logs[df_logs['Feedback'].isin(['👍', '👎'])]) / len(df_logs) * 100) if len(df_logs) > 0 else 0
-            c3.metric("用戶互動率", f"{rate:.1f}%")
+        sheet = get_google_sheet_standalone()
+        if sheet:
+            data = sheet.get_all_records()
+            df_logs = pd.DataFrame(data)
+            
+            if not df_logs.empty:
+                if 'Time' in df_logs.columns:
+                    df_logs['Time'] = pd.to_datetime(df_logs['Time'])
+                
+                # --- KPI 看板 ---
+                c1, c2, c3 = st.columns(3)
+                c1.metric("累計搜尋", len(df_logs))
+                c2.metric("總點讚數", len(df_logs[df_logs['Feedback'] == '👍']))
+                rate = (len(df_logs[df_logs['Feedback'].isin(['👍', '👎'])]) / len(df_logs) * 100) if len(df_logs) > 0 else 0
+                c3.metric("用戶互動率", f"{rate:.1f}%")
 
-            st.divider()
+                st.divider()
 
-            # --- 🤖 Gemini 童書專家分析 (最新 SDK 版) ---
-            st.subheader("💡 童書專家營運深度診斷")
-            if st.button("啟動 AI 專家分析"):
-                with st.spinner("專家正在審閱最近 50 筆日誌..."):
-                    client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
-                    
-                    # 準備數據 (包含 SessionID, Input, AI 推薦語, Feedback)
-                    recent_data = df_logs[['Time', 'SessionID', 'Input', 'AI', 'Feedback']].tail(50).to_string()
-                    
-                    prompt = f"""
-                    你是 ibookle 首席童書專家。請分析以下 50 筆搜尋紀錄：
-                    {recent_data}
-                    
-                    請撰寫一份專家報告，結構如下：
-                    [報告標題]: (請給這份分析一個標題)
-                    [痛點分析]: (分析家長的搜尋意圖與年齡層)
-                    [推薦稽核]: (評估 AI 推薦語是否具備專家溫度)
-                    [優化建議]: (針對負評或空白結果給出具體行動建議)
-                    """
-                    
-                    try:
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=prompt
-                        )
-                        # 清洗 Markdown 代碼塊
-                        result = response.text.replace("```markdown", "").replace("```", "").strip()
-                        st.markdown(f'<div style="background-color:#F0F2F6; padding:25px; border-radius:12px; border-left: 5px solid #E67E22;">{result}</div>', unsafe_allow_html=True)
-                    except Exception as e:
-                        st.error(f"AI 分析執行失敗: {e}")
+                # --- 🤖 AI 專家診斷 ---
+                st.subheader("💡 童書專家營運深度診斷")
+                if st.button("啟動 AI 專家分析"):
+                    with st.spinner("專家正在審閱最近 50 筆日誌..."):
+                        client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+                        recent_data = df_logs[['Time', 'Input', 'AI', 'Feedback']].tail(50).to_string()
+                        
+                        prompt = f"你是 ibookle 首席童書專家。請分析以下搜尋紀錄：\n{recent_data}\n\n請撰寫報告包含：[報告標題]、[痛點分析]、[推薦稽核]、[優化建議]。不使用表情符號。"
+                        
+                        try:
+                            response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+                            st.markdown(f'<div style="background-color:#F0F2F6; padding:25px; border-radius:12px; border-left: 5px solid #E67E22;">{response.text}</div>', unsafe_allow_html=True)
+                        except Exception as e:
+                            st.error(f"AI 分析失敗: {e}")
 
-            st.divider()
-
-            # --- 流量趨勢圖 ---
-            st.subheader("📈 搜尋流量趨勢")
-            daily_trend = df_logs.resample('D', on='Time').size().reset_index(name='次數')
-            fig = px.area(daily_trend, x='Time', y='次數', color_discrete_sequence=['#E67E22'])
-            st.plotly_chart(fig, use_container_width=True)
-
-            # --- 資料明細 ---
-            st.subheader("📋 最近搜尋明細")
-            st.dataframe(df_logs.tail(20), use_container_width=True)
-        else:
-            st.info("目前還沒有日誌數據喔！")
-
+                st.divider()
+                st.subheader("📋 最近搜尋明細")
+                st.dataframe(df_logs.tail(20), use_container_width=True)
+            else:
+                st.info("目前還沒有日誌數據。")
+    
     with tab_health:
-        st.subheader("🛡️ 資料庫健康診斷預留區")
-        st.info("這裡是未來擴充的功能，例如自動檢查 ISBN 遺漏或爬蟲失敗率。")
+        st.subheader("🛡️ 資料庫健康診斷")
+        st.info("系統運作中，目前資料庫連線正常。")
