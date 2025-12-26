@@ -84,6 +84,7 @@ def get_recommendations(user_query):
             model="models/gemini-embedding-001", 
             google_api_key=api_key, 
             task_type="retrieval_query"
+            output_dimensionality=768  # <--- 加入這行
         )
         
         vectorstore = PineconeVectorStore(
