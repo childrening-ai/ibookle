@@ -13,12 +13,25 @@ from oauth2client.service_account import ServiceAccountCredentials
 # ========================================================
 def get_google_sheet_standalone():
     try:
+        # 1. 取得原始字串
         creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
-        creds_info = json.loads(creds_json_str.strip())
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/drive']
+        
+        # 2. 終極清洗：去除前後空白、處理可能的轉義換行符號
+        clean_creds = creds_json_str.strip()
+        if "\\n" in clean_creds:
+            clean_creds = clean_creds.replace("\\n", "\n")
+        
+        # 3. 解析 JSON
+        creds_info = json.loads(clean_creds)
+        
+        # 4. 使用標準 Scope
+        scope = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client_gs = gspread.authorize(creds)
-        # 請確認這裡的 Sheet 名稱與 WorkSheet 名稱正確
         return client_gs.open("AI_User_Logs").worksheet("Brief_Logs")
     except Exception as e:
         st.error(f"❌ 試算表連線失敗: {e}")
