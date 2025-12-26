@@ -21,30 +21,25 @@ if "search_results" not in st.session_state:
 
 # ================= 2. 功能函數定義 =================
 
-def get_google_sheet_standalone():
+def get_google_sheet():
     try:
-        # 1. 取得原始字串
-        creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
-        
-        # 2. 終極清洗：去除前後空白、處理可能的轉義換行符號
-        clean_creds = creds_json_str.strip()
-        if "\\n" in clean_creds:
-            clean_creds = clean_creds.replace("\\n", "\n")
-        
-        # 3. 解析 JSON
-        creds_info = json.loads(clean_creds)
-        
-        # 4. 使用標準 Scope
+        raw_json = st.secrets["GOOGLE_CREDENTIALS"]
+        # 終極清洗邏輯：確保任何隱形字元或非法換行都不會干擾
+        try:
+            creds_info = json.loads(raw_json.strip(), strict=False)
+        except:
+            clean_json = raw_json.replace('\n', '\\n').replace('\r', '\\r')
+            creds_info = json.loads(clean_json, strict=False)
+            
         scope = [
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive'
         ]
-        
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client_gs = gspread.authorize(creds)
         return client_gs.open("AI_User_Logs").worksheet("Brief_Logs")
     except Exception as e:
-        st.error(f"❌ 試算表連線失敗: {e}")
+        # 在前台我們不顯示詳細錯誤，以免干擾家長使用
         return None
 
 def save_to_log(user_input, ai_response, recommended_books):
