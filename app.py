@@ -26,82 +26,45 @@ if "last_row_idx" not in st.session_state:
 
 # ================= 2. 功能函數定義 =================
 
-def get_google_sheet():
-    """使用終極清洗邏輯的連線函數"""
-    try:
-        raw_json = st.secrets["GOOGLE_CREDENTIALS"]
-        # 處理 Streamlit Secrets 可能產生的非法控制字元
-        try:
-            creds_info = json.loads(raw_json.strip(), strict=False)
-        except:
-            clean_json = raw_json.replace('\n', '\\n').replace('\r', '\\r')
-            creds_info = json.loads(clean_json, strict=False)
-            
-        scope = [
-            'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive'
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        client_gs = gspread.authorize(creds)
-        return client_gs.open("AI_User_Logs").worksheet("Brief_Logs")
-    except Exception as e:
-        # 開發偵錯用 (若要上線可改為 return None)
-        st.sidebar.error(f"資料庫連線中...") 
-        return None
-
-def save_to_log(user_input, ai_response, recommended_books):
-    try:
-        sheet = get_google_sheet()
-        if sheet:
-            tw_tz = pytz.timezone('Asia/Taipei')
-            now_tw = datetime.datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
-            new_row = [now_tw, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
-            sheet.append_row(new_row)
-            return len(sheet.get_all_values())
-        return None
-    except:
-        return None
-
-def update_log_feedback():
-    row_idx = st.session_state.last_row_idx
-    if row_idx:
-        score = st.session_state.get(f"fb_key_{row_idx}")
-        if score is not None:
-            try:
-                sheet = get_google_sheet()
-                feedback_text = "👍" if score == 1 else "👎"
-                sheet.update_cell(row_idx, 6, feedback_text)
-            except:
-                pass
-
 def get_recommendations(user_query):
-    """括號已完全校正且修正 768 維度限制"""
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         pinecone_key = st.secrets["PINECONE_API_KEY"]
         
-        # 1. 定義 Embedding (注意末尾的括號)
-        embeddings = GoogleGenerativeAIEmbeddings(
+        # 1. 初始化 Embedding
+        embeddings_model = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-001", 
             google_api_key=api_key, 
-            task_type="retrieval_query",
-            output_dimensionality=768
+            task_type="retrieval_query"
         )
         
-        # 2. 定義 Vector Store (注意末尾的括號)
+        # 2. 手動測試維度並截斷的包裹函式
+        # 有些版本的 LangChain 會忽略 output_dimensionality，我們手動切片
+        class DimensionFixer:
+            def __init__(self, model):
+                self.model = model
+            def embed_query(self, text):
+                vec = self.model.embed_query(text)
+                return vec[:768] # 強制只取前 768 碼
+            def embed_documents(self, texts):
+                vecs = self.model.embed_documents(texts)
+                return [v[:768] for v in vecs]
+
+        fixed_embeddings = DimensionFixer(embeddings_model)
+        
+        # 3. 連接 Pinecone
         vectorstore = PineconeVectorStore(
             index_name="gemini768", 
-            embedding=embeddings, 
+            embedding=fixed_embeddings, 
             pinecone_api_key=pinecone_key
         )
         
-        # 3. 執行搜尋並回傳
         return vectorstore.similarity_search(user_query, k=5)
         
     except Exception as e:
         st.error(f"🔍 搜尋引擎暫時無法連線: {e}")
         return None
-        
+
 # ================= 3. 介面設計與 CSS =================
 
 st.set_page_config(page_title="ibookle", layout="wide", initial_sidebar_state="expanded")
