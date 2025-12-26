@@ -14,17 +14,18 @@ from oauth2client.service_account import ServiceAccountCredentials
 def get_google_sheet_standalone():
     try:
         # 1. 取得原始字串
-        creds_json_str = st.secrets["GOOGLE_CREDENTIALS"]
+        raw_json = st.secrets["GOOGLE_CREDENTIALS"]
         
-        # 2. 終極清洗：去除前後空白、處理可能的轉義換行符號
-        clean_creds = creds_json_str.strip()
-        if "\\n" in clean_creds:
-            clean_creds = clean_creds.replace("\\n", "\n")
+        # 2. 強力清洗：處理非法控制字元
+        # strict=False 會允許 JSON 字串中包含真正的換行符號
+        try:
+            creds_info = json.loads(raw_json.strip(), strict=False)
+        except json.JSONDecodeError:
+            # 如果還是失敗，嘗試處理反斜槓轉義問題
+            clean_json = raw_json.replace('\n', '\\n').replace('\r', '\\r')
+            creds_info = json.loads(clean_json, strict=False)
         
-        # 3. 解析 JSON
-        creds_info = json.loads(clean_creds)
-        
-        # 4. 使用標準 Scope
+        # 3. 設定標準 Scope
         scope = [
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive'
