@@ -1,6 +1,7 @@
 streamlit
 pandas
-google-generativeai
+plotly
+google-genai
 pinecone
 langchain-google-genai
 langchain-pinecone
