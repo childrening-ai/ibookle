@@ -1,10 +1,10 @@
-streamlit
+streamlit==1.41.1
 pandas
 plotly
-google-genai
-pinecone
-langchain-google-genai
-langchain-pinecone
+google-genai==0.3.0
 gspread
 oauth2client
 python-dotenv
+langchain-google-genai
+langchain-pinecone
+pinecone-client
