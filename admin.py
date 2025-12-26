@@ -46,12 +46,12 @@ with st.sidebar:
     if sheet:
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
-        # 轉換時間 (請確保你的標題是 Timestamp)
-        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+        # 轉換時間 (請確保你的標題是 Time)
+        df['Time'] = pd.to_datetime(df['Time'])
         
         st.subheader("📅 時間篩選")
-        min_date = df['Timestamp'].min().date()
-        max_date = df['Timestamp'].max().date()
+        min_date = df['Time'].min().date()
+        max_date = df['Time'].max().date()
         date_range = st.date_input("選擇日期範圍", value=(min_date, max_date))
         
         # 處理日期選擇（避免只選一個日期時報錯）
@@ -69,7 +69,7 @@ with st.sidebar:
 # ================= 3. 資料篩選與 AI 分析 =================
 
 if not df.empty:
-    mask = (df['Timestamp'].dt.date >= start_date) & (df['Timestamp'].dt.date <= end_date)
+    mask = (df['Time'].dt.date >= start_date) & (df['Time'].dt.date <= end_date)
     filtered_df = df.loc[mask]
 
     # --- KPI 區塊 ---
@@ -111,14 +111,14 @@ if not df.empty:
     # --- 資料表格 ---
     st.subheader("📝 詳細紀錄清單")
     if selected_cols:
-        display_df = filtered_df[selected_cols].sort_values(by="Timestamp", ascending=False)
+        display_df = filtered_df[selected_cols].sort_values(by="Time", ascending=False)
         st.dataframe(display_df, use_container_width=True)
     
     # --- 趨勢圖 ---
     st.divider()
     st.subheader("📈 每日搜尋量")
-    trend_df = filtered_df.resample('D', on='Timestamp').size().reset_index(name='次數')
-    fig = px.line(trend_df, x='Timestamp', y='次數')
+    trend_df = filtered_df.resample('D', on='Time').size().reset_index(name='次數')
+    fig = px.line(trend_df, x='Time', y='次數')
     st.plotly_chart(fig, use_container_width=True)
 
 else:
