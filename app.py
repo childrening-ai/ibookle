@@ -75,29 +75,33 @@ def update_log_feedback():
                 pass
 
 def get_recommendations(user_query):
-    """強化版搜尋函數，顯式傳入 API Key"""
+    """括號已完全校正且修正 768 維度限制"""
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         pinecone_key = st.secrets["PINECONE_API_KEY"]
         
+        # 1. 定義 Embedding (注意末尾的括號)
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-001", 
             google_api_key=api_key, 
-            task_type="retrieval_query"
-            output_dimensionality=768  # <--- 加入這行
+            task_type="retrieval_query",
+            output_dimensionality=768
         )
         
+        # 2. 定義 Vector Store (注意末尾的括號)
         vectorstore = PineconeVectorStore(
             index_name="gemini768", 
             embedding=embeddings, 
             pinecone_api_key=pinecone_key
         )
         
+        # 3. 執行搜尋並回傳
         return vectorstore.similarity_search(user_query, k=5)
+        
     except Exception as e:
         st.error(f"🔍 搜尋引擎暫時無法連線: {e}")
         return None
-
+        
 # ================= 3. 介面設計與 CSS =================
 
 st.set_page_config(page_title="ibookle", layout="wide", initial_sidebar_state="expanded")
