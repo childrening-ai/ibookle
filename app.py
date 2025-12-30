@@ -18,13 +18,15 @@ if "search_results" not in st.session_state:
     st.session_state.search_results = None
 if "last_row_idx" not in st.session_state:
     st.session_state.last_row_idx = None
+if "prev_query" not in st.session_state:
+    st.session_state.prev_query = ""
 
 if "GOOGLE_API_KEY" in st.secrets:
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     client = None
 
-# ================= 2. 核心函式定義 (完全保留原始版本邏輯) =================
+# ================= 2. 核心函式定義 (完全保留) =================
 
 def get_google_sheet():
     try:
@@ -101,14 +103,13 @@ def get_recommendations(user_query):
         st.error(f"檢索系統異常: {e}")
         return None, False
 
-# ================= 3. UI 介面樣式 =================
+# ================= 3. UI 介面樣式 (完全保留) =================
 
 st.markdown("""
     <style>
     #MainMenu, footer, header {visibility: hidden; height: 0;}
     div[data-testid="stStatusWidget"], .stAppViewFooter, [data-testid="stDecoration"], [data-testid="stHeader"] { display: none !important; }
     button[title="View fullscreen"] { display: none !important; }
-
     [data-testid="stSidebarCollapsedControl"] {
         background-color: #E67E22 !important; border-radius: 50% !important;
         width: 40px !important; height: 40px !important; left: 15px !important; top: 15px !important;
@@ -122,7 +123,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 側邊欄：計次、燈號、分享報告與問卷回饋
+# 側邊欄：統計、分享、回饋與問卷
 with st.sidebar:
     st.header("📊 ibookle 統計")
     total_answers = "---"
@@ -137,15 +138,13 @@ with st.sidebar:
     st.write(system_status)
     st.divider()
 
-    # --- 重點：將主頁面的分享功能移至此處 ---
+    # --- 搬移過來的分享與回饋區 ---
     if st.session_state.search_results:
         st.subheader("📤 儲存與分享報告")
         res = st.session_state.search_results
-        
-        # 保留原始分享文字邏輯
         share_content = f"🌟 ibookle 專家選書報告 🌟\n"
         share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
-        share_content += f"🔍 您諮詢的需求：{st.session_state.get('prev_query', '')}\n\n"
+        share_content += f"🔍 您諮詢的需求：{st.session_state.prev_query}\n\n"
         share_content += f"💡 專家分析建議：\n{res['ai_response']}\n\n"
         share_content += f"📚 精選推薦書單：\n"
         for i, book in enumerate(res["books"], 1):
@@ -155,12 +154,12 @@ with st.sidebar:
             share_content += f"   🔗 連結：{book['Link']}\n\n"
         share_content += "--- 分享自 ibookle AI 專家導讀系統 ---"
 
-        if st.button("📋 生成分享文字", use_container_width=True):
+        if st.button("📋 生成分享文字 (Line/FB)"):
             st.code(share_content, language=None)
             st.toast("報告已生成，準備好分享囉！", icon="✨")
         
         st.download_button(
-            label="📄 下載報告 (.txt)",
+            label="📄 下載建議報告 (.txt)",
             data=share_content,
             file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
             mime="text/plain",
@@ -168,17 +167,19 @@ with st.sidebar:
         )
         st.divider()
 
-        # --- 重點：將主頁面的 👍/👎 問卷回饋移至此處 ---
-        st.subheader("🌟 這份建議有幫助嗎？")
+        st.subheader("🌟 滿意度回饋")
         if st.session_state.last_row_idx:
             fb_key = f"fb_key_{st.session_state.last_row_idx}"
             st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
-            if fb_key in st.session_state and st.session_state[fb_key] is not None:
-                st.caption("✅ 感謝您的回饋！")
+            if fb_key not in st.session_state or st.session_state[fb_key] is None:
+                st.write("這份建議對您有幫助嗎？")
+            else:
+                st.write("✅ 感謝您的回饋！")
         st.divider()
 
     st.subheader("📢 意見回饋")
     st.link_button("📝 填寫使用問卷", "https://your-google-form-link", use_container_width=True)
+    st.divider()
     st.caption("© 2026 ibookle")
 
 # 主頁面內容
@@ -186,9 +187,9 @@ st.title("💡 ibookle 童書共讀專家")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
 st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的主題，我會為你挑選最適合的童書。")
 
-user_query = st.text_input("", placeholder="🔍 例如：想找關於克服分離焦慮的童書...", key="main_search")
+user_query = st.text_input("", placeholder="🔍 例如：想找關於克服分離危慮的童書...", key="main_search")
 
-# ================= 4. 搜尋與生成邏輯 (完全保留原始 Prompt) =================
+# ================= 4. 搜尋與生成邏輯 (完全保留原始內容) =================
 
 if user_query and (not st.session_state.search_results or st.session_state.get("prev_query") != user_query):
     with st.spinner("🔍 正在為您翻閱書櫃並整理建議..."):
@@ -197,12 +198,10 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
             book_titles = [d.metadata.get('Title','未知') for d in results]
             titles_str = ", ".join(book_titles)
             
-            # --- 原始 Prompt 邏輯對齊 ---
             if is_vague_mode:
                 prompt = f"""
                 使用者問了一個模糊的問題："{user_query}"
                 我們目前挑選了專家評分最高(三星)的經典書：{titles_str}
-                
                 請以 ibookle 專家身份回覆：
                 1. 開頭請說「您好！」(禁止說家長您好)。
                 2. 說明這個問題範圍較廣，因此您先準備了幾本「絕對不容錯過的專家首選」。
@@ -213,7 +212,6 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
                 prompt = f"""
                 使用者需求：{user_query}
                 相關精選童書：{titles_str}
-                
                 請以 ibookle 專家身份回覆：
                 1. 開頭請說「您好！」(禁止說家長您好)。
                 2. 簡述為什麼這幾本書適合目前的提問情境。
@@ -239,14 +237,14 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
                 }
                 st.session_state.prev_query = user_query
                 st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
+                st.rerun() # 搜尋完刷新以顯示側邊欄功能
             except: st.error("AI 專家目前連線不穩。")
 
-# ================= 5. 結果顯示 (主頁面淨化版) =================
+# ================= 5. 結果顯示 =================
 
 if st.session_state.search_results:
     res = st.session_state.search_results
     st.markdown(f'<div class="expert-suggestion-text"><b>🤖 專家建議：</b><br>{res["ai_response"]}</div>', unsafe_allow_html=True)
-    
     st.markdown("### 📖 精選推薦清單")
     for b in res["books"]:
         with st.container():
@@ -262,7 +260,9 @@ if st.session_state.search_results:
         st.write("✨ **一鍵加入圖書館借閱清單**")
         st.write("✨ **同步至 Notion/Evernote 閱讀筆記**")
     
-    st.caption("💡 想要儲存報告或進行回饋？請展開左上角選單。")
+    st.caption("💡 欲儲存報告或進行滿意度回饋，請展開左上角橘色選單。")
 else:
     st.markdown("---")
     st.caption("👋 歡迎使用 ibookle！請描述孩子目前的狀況，讓專家為您挑選適合的童書。")
+
+st.caption("© 2026 ibookle - 讓每一段共讀時光都更有意義")
