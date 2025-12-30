@@ -78,7 +78,11 @@ def update_log_feedback():
                 pass
 
 def get_recommendations(user_query):
-    """維度修正器：確保 Embedding 符合 Pinecone 的 768 維度"""
+    """
+    修改邏輯：
+    1. 抓取 Top 15 最相近書籍 (候選池)
+    2. 確保提取 Expert_Rating 欄位
+    """
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         pinecone_key = st.secrets["PINECONE_API_KEY"]
@@ -91,10 +95,31 @@ def get_recommendations(user_query):
             def __init__(self, model): self.model = model
             def embed_query(self, text): return self.model.embed_query(text)[:768]
             def embed_documents(self, texts): return [v[:768] for v in self.model.embed_documents(texts)]
+        
         fixed_embeddings = DimensionFixer(embeddings_model)
         vectorstore = PineconeVectorStore(index_name="gemini768", embedding=fixed_embeddings, pinecone_api_key=pinecone_key)
-        return vectorstore.similarity_search(user_query, k=5)
-    except:
+        
+        # 1. 先抓取較大量的候選清單 (Top 15)
+        search_results = vectorstore.similarity_search_with_score(user_query, k=15)
+        
+        # 2. 轉換為易處理的清單
+        candidate_books = []
+        for doc, score in search_results:
+            meta = doc.metadata
+            candidate_books.append({
+                "doc": doc,
+                "rating": float(meta.get('Expert_Rating', 0)),
+                "score": score
+            })
+        
+        # 3. 從這批相近的書裡，根據星等 (Rating) 由高到低排序
+        # 若星等相同，則保留原本的相似度順序
+        candidate_books.sort(key=lambda x: x['rating'], reverse=True)
+        
+        # 4. 回傳星等排序後的前 5 名
+        return [item["doc"] for item in candidate_books[:5]]
+    except Exception as e:
+        st.error(f"檢索失敗: {e}")
         return None
 
 # ================= 3. UI 介面樣式 (視覺深度優化) =================
@@ -188,22 +213,29 @@ st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的�
 
 user_query = st.text_input("", placeholder="🔍 例如：想找關於克服分離焦慮的童書...", key="main_search")
 
-# ================= 4. 搜尋與生成邏輯 =================
+# ================= 4. 搜尋與生成邏輯 (修改點：注入專家意圖與加強引導) =================
 
 if user_query and (not st.session_state.search_results or st.session_state.get("prev_query") != user_query):
     with st.spinner("🔍 正在為您翻閱書櫃並整理建議..."):
+        # 這裡會得到「最相關且星等最高」的 5 本書
         results = get_recommendations(user_query)
+        
         if results:
             book_titles = [d.metadata.get('Title','未知') for d in results]
             titles_str = ", ".join(book_titles)
             
-            # 童書專家語境 Prompt
+            # 童書專家語境 Prompt：特別強調「專家評選」
             prompt = f"""
-            使用者目前的問題：{user_query}
-            我為他找到的相關童書包括：{titles_str}
-            請以專業親子共讀專家的身份，用親切溫和的語氣，簡述為什麼這幾本書適合使用者。
-            不需要詳細介紹每本書，只要針對使用者的情境給予一段鼓勵與引導即可。
-            (約 150 字，禁止使用表情符號)
+            你是一位資深親子共讀專家。
+            使用者需求：{user_query}
+            
+            我們從 2,221 筆館藏中，篩選出相關度高且具備「專家高評分」的童書：{titles_str}
+            
+            請撰寫一段約 150 字的建議：
+            1. 親切溫和，給予家長鼓勵。
+            2. 提到這幾本書是我們經過「深度導讀後選出的精選」。
+            3. 若有某本書在清單中特別突出，可以稍微帶到它的價值。
+            4. 禁止使用表情符號。
             """
             
             try:
@@ -219,28 +251,31 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
                         "Category": d.metadata.get('Category', '一般'),
                         "Quick_Summary": d.metadata.get('Quick_Summary', ''), 
                         "Refine_Content": d.metadata.get('Refine_Content', '暫無導讀'), 
-                        "Link": d.metadata.get('Link', '')
+                        "Link": d.metadata.get('Link', ''),
+                        "Rating": d.metadata.get('Expert_Rating', 0) # 記錄星等供顯示
                     } for d in results]
                 }
                 st.session_state.prev_query = user_query
-                # 存入紀錄
                 st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
             except:
                 st.error("AI 專家目前連線不穩，請稍候。")
 
-# ================= 5. 結果顯示 (極簡與手機優化) =================
+# ================= 5. 結果顯示 (加入專家推薦標籤) =================
 
 if st.session_state.search_results:
     res = st.session_state.search_results
-    
-    # 專家建議：純文字呈現
     st.markdown(f'<div class="expert-suggestion-text"><b>🤖 專家建議：</b><br>{res["ai_response"]}</div>', unsafe_allow_html=True)
     
     st.markdown("### 📖 精選推薦清單")
     for b in res["books"]:
         with st.container():
-            st.subheader(f"《{b['Title']}》")
-            st.caption(f"✍️ 作者：{b['Author']} | 🎨 繪者：{b['Illustrator']} | 🏷️ 分類：{b['Category']}")
+            # 修改標題，如果星等為 3.0，加上特別標記
+            header_text = f"《{b['Title']}》"
+            if float(b['Rating']) >= 3.0:
+                header_text += " ✨ [專家首選]"
+            
+            st.subheader(header_text)
+            st.caption(f"✍️ 作者：{b['Author']} | 🏷️ 分類：{b['Category']} | ⭐ 推薦指數：{b['Rating']}")
             
             if b['Quick_Summary']: 
                 st.info(b['Quick_Summary'])
@@ -248,12 +283,12 @@ if st.session_state.search_results:
             with st.expander("🔍 點擊查看專家深度導讀"):
                 st.markdown(b['Refine_Content'])
             
-            # 獨立購書按鈕 (手機全寬)
             if b['Link']: 
                 st.link_button(f"🛒 前往購買《{b['Title']}》", b['Link'], use_container_width=True)
         
-        st.write("") 
         st.divider()
+
+# ... (後續回饋與 footer 保持不變)
 
     # 問卷回饋區 (透明背景)
     if st.session_state.last_row_idx:
