@@ -79,9 +79,10 @@ def update_log_feedback():
 
 def get_recommendations(user_query):
     """
-    修改邏輯：
-    1. 抓取 Top 15 最相近書籍 (候選池)
-    2. 確保提取 Expert_Rating 欄位
+    雙層邏輯：
+    1. 判定是否為模糊提問 (Vague Query)
+    2. 明確提問：Top 15 相關度後按星等排序
+    3. 模糊提問：直接撈取高星等經典書
     """
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
@@ -98,29 +99,43 @@ def get_recommendations(user_query):
         
         fixed_embeddings = DimensionFixer(embeddings_model)
         vectorstore = PineconeVectorStore(index_name="gemini768", embedding=fixed_embeddings, pinecone_api_key=pinecone_key)
+
+        # --- 判定模糊提問 ---
+        vague_keywords = ["推薦", "好書", "小學生", "繪本", "有什麼書", "介紹", "童書", "閱讀"]
+        # 判斷標準：字數極短 或 僅包含泛稱詞
+        is_vague = len(user_query.strip()) <= 4 or user_query.strip() in vague_keywords
+
+        if is_vague:
+            # 模糊提問策略：不比相關度，直接抓取資料庫中最推薦(Rating高)的書
+            # 我們先抓 50 本，然後在裡面挑 Rating 最高的
+            raw_results = vectorstore.similarity_search(user_query, k=50)
+            candidate_books = []
+            for d in raw_results:
+                candidate_books.append({
+                    "doc": d,
+                    "rating": float(d.metadata.get('Expert_Rating', 0))
+                })
+            # 依星等排序
+            candidate_books.sort(key=lambda x: x['rating'], reverse=True)
+            return [item["doc"] for item in candidate_books[:5]], True
         
-        # 1. 先抓取較大量的候選清單 (Top 15)
-        search_results = vectorstore.similarity_search_with_score(user_query, k=15)
-        
-        # 2. 轉換為易處理的清單
-        candidate_books = []
-        for doc, score in search_results:
-            meta = doc.metadata
-            candidate_books.append({
-                "doc": doc,
-                "rating": float(meta.get('Expert_Rating', 0)),
-                "score": score
-            })
-        
-        # 3. 從這批相近的書裡，根據星等 (Rating) 由高到低排序
-        # 若星等相同，則保留原本的相似度順序
-        candidate_books.sort(key=lambda x: x['rating'], reverse=True)
-        
-        # 4. 回傳星等排序後的前 5 名
-        return [item["doc"] for item in candidate_books[:5]]
+        else:
+            # 明確提問策略：先找 Top 15 相關，再依星等排序
+            search_results = vectorstore.similarity_search_with_score(user_query, k=15)
+            candidate_books = []
+            for doc, score in search_results:
+                candidate_books.append({
+                    "doc": doc,
+                    "rating": float(doc.metadata.get('Expert_Rating', 0)),
+                    "score": score
+                })
+            # 排序：星等優先，分數次之
+            candidate_books.sort(key=lambda x: (x['rating'], x['score']), reverse=True)
+            return [item["doc"] for item in candidate_books[:5]], False
+
     except Exception as e:
-        st.error(f"檢索失敗: {e}")
-        return None
+        st.error(f"檢索系統異常: {e}")
+        return None, False
 
 # ================= 3. UI 介面樣式 (視覺深度優化) =================
 
@@ -213,35 +228,45 @@ st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的�
 
 user_query = st.text_input("", placeholder="🔍 例如：想找關於克服分離焦慮的童書...", key="main_search")
 
-# ================= 4. 搜尋與生成邏輯 (修改點：注入專家意圖與加強引導) =================
+# ================= 4. 搜尋與生成邏輯 (稱謂修正與 Prompt 優化) =================
 
 if user_query and (not st.session_state.search_results or st.session_state.get("prev_query") != user_query):
     with st.spinner("🔍 正在為您翻閱書櫃並整理建議..."):
-        # 這裡會得到「最相關且星等最高」的 5 本書
-        results = get_recommendations(user_query)
+        results, is_vague_mode = get_recommendations(user_query)
         
         if results:
             book_titles = [d.metadata.get('Title','未知') for d in results]
             titles_str = ", ".join(book_titles)
             
-            # 童書專家語境 Prompt：特別強調「專家評選」
-            prompt = f"""
-            你是一位資深親子共讀專家。
-            使用者需求：{user_query}
-            
-            我們從 2,221 筆館藏中，篩選出相關度高且具備「專家高評分」的童書：{titles_str}
-            
-            請撰寫一段約 150 字的建議：
-            1. 親切溫和，給予家長鼓勵。
-            2. 提到這幾本書是我們經過「深度導讀後選出的精選」。
-            3. 若有某本書在清單中特別突出，可以稍微帶到它的價值。
-            4. 禁止使用表情符號。
-            """
+            # 根據模式切換 Prompt
+            if is_vague_mode:
+                prompt = f"""
+                使用者問了一個模糊的問題："{user_query}"
+                我們目前挑選了專家評分最高(三星)的經典書：{titles_str}
+                
+                請以 ibookle 專家身份回覆：
+                1. 開頭請說「您好！」(禁止說家長您好)。
+                2. 說明這個問題範圍較廣，因此您先準備了幾本「絕對不容錯過的專家首選」。
+                3. 溫柔地詢問更多細節（如：孩子的年級、興趣、或特定的困擾）。
+                4. 語氣親切，約 150 字，禁止使用表情符號。
+                """
+            else:
+                prompt = f"""
+                使用者需求：{user_query}
+                相關精選童書：{titles_str}
+                
+                請以 ibookle 專家身份回覆：
+                1. 開頭請說「您好！」(禁止說家長您好)。
+                2. 簡述為什麼這幾本書適合目前的提問情境。
+                3. 提到這些書是經過專家深度導讀後的精選建議。
+                4. 語氣親切專業，約 150 字，禁止使用表情符號。
+                """
             
             try:
                 response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
                 ai_response = response.text
                 
+                # 存入 Session State (包含 Rating 資訊)
                 st.session_state.search_results = {
                     "ai_response": ai_response, 
                     "books": [{
@@ -252,7 +277,7 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
                         "Quick_Summary": d.metadata.get('Quick_Summary', ''), 
                         "Refine_Content": d.metadata.get('Refine_Content', '暫無導讀'), 
                         "Link": d.metadata.get('Link', ''),
-                        "Rating": d.metadata.get('Expert_Rating', 0) # 記錄星等供顯示
+                        "Rating": d.metadata.get('Expert_Rating', 0)
                     } for d in results]
                 }
                 st.session_state.prev_query = user_query
