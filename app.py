@@ -313,6 +313,60 @@ if st.session_state.search_results:
         
         st.divider()
 
+import datetime
+
+# 檢查是否有搜尋結果
+if "search_results" in st.session_state and st.session_state.search_results:
+    res = st.session_state.search_results
+    
+    st.divider() # 視覺分割線
+    
+    # --- 建立分享內容字串 ---
+    # 1. 標題與 AI 的總結建議
+    share_content = f"🌟 ibookle 專家選書報告 🌟\n"
+    share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
+    share_content += f"🔍 您諮詢的需求：{user_query}\n\n"
+    share_content += f"💡 專家分析建議：\n{res['ai_response']}\n\n"
+    share_content += f"📚 精選推薦書單：\n"
+    
+    # 2. 迭代書籍清單
+    for i, book in enumerate(res["books"], 1):
+        share_content += f"{i}. 《{book['Title']}》\n"
+        share_content += f"   ⭐ 專家評分：{book['Rating']} / 3.0\n"
+        share_content += f"   📌 專業導讀：{book['Quick_Summary']}\n"
+        share_content += f"   🔗 連結：{book['Link']}\n\n"
+    
+    share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
+
+    # --- 顯示分享功能區塊 ---
+    st.subheader("📤 儲存與分享本次報告")
+    
+    col_copy, col_dl = st.columns(2)
+    
+    with col_copy:
+        # 使用 st.code 讓使用者容易點擊複製，或用按鈕觸發 toast
+        if st.button("📋 生成分享文字 (Line/FB)"):
+            st.info("下方文字已準備好，您可以直接長按複製分享給親友！")
+            st.code(share_content, language=None)
+            st.toast("報告已生成，準備好分享囉！", icon="✨")
+
+    with col_dl:
+        # 提供下載功能，讓家長存檔
+        st.download_button(
+            label="📄 下載為專家建議報告 (.txt)",
+            data=share_content,
+            file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
+            mime="text/plain",
+            help="將整份專家建議存成純文字檔，方便日後查看"
+        )
+
+    # 預留 Pro 版功能預覽 (增加計畫書說服力)
+    with st.expander("🔒 進階功能 (Pro 版預覽)"):
+        st.write("✨ **一鍵加入圖書館借閱清單**")
+        st.write("✨ **同步至 Notion/Evernote 閱讀筆記**")
+        st.write("✨ **生成孩子專屬的知識成長分析圖表**")
+
+
 # ... (後續回饋與 footer 保持不變)
 
     # 問卷回饋區 (透明背景)
