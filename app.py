@@ -346,14 +346,14 @@ if "search_results" in st.session_state and st.session_state.search_results:
     with col_copy:
         # 使用 st.code 讓使用者容易點擊複製，或用按鈕觸發 toast
         if st.button("📋 生成分享文字 (Line/FB)"):
-            st.info("下方文字已準備好，您可以直接長按複製分享給親友！")
+            st.info("下方文字已準備好，您可以直接長按複製並分享！")
             st.code(share_content, language=None)
             st.toast("報告已生成，準備好分享囉！", icon="✨")
 
     with col_dl:
         # 提供下載功能，讓家長存檔
         st.download_button(
-            label="📄 下載為專家建議報告 (.txt)",
+            label="📄 下載書單文字檔 (.txt)",
             data=share_content,
             file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
             mime="text/plain",
@@ -361,10 +361,10 @@ if "search_results" in st.session_state and st.session_state.search_results:
         )
 
     # 預留 Pro 版功能預覽 (增加計畫書說服力)
-    with st.expander("🔒 進階功能 (Pro 版預覽)"):
-        st.write("✨ **一鍵加入圖書館借閱清單**")
-        st.write("✨ **同步至 Notion/Evernote 閱讀筆記**")
-        st.write("✨ **生成孩子專屬的知識成長分析圖表**")
+    with st.expander("🔒 進階功能預覽（製作中）"):
+        st.write("✨ **加入圖書館借閱清單**")
+        st.write("✨ **加入自訂書單**")
+        st.write("✨ **生成閱讀分析報告**")
 
 
 # ... (後續回饋與 footer 保持不變)
