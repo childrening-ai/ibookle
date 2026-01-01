@@ -10,19 +10,19 @@ from langchain_pinecone import PineconeVectorStore
 # ================= 1. 初始化與環境配置 =================
 load_dotenv()
 
+# 設定頁面屬性
 st.set_page_config(page_title="ibookle 童書專家", layout="wide", initial_sidebar_state="collapsed")
 
+# 初始化 Session State
 if "session_id" not in st.session_state: 
     st.session_state.session_id = str(uuid.uuid4())[:8]
 if "search_results" not in st.session_state:
     st.session_state.search_results = None
 if "last_row_idx" not in st.session_state:
     st.session_state.last_row_idx = None
-if "prev_query" not in st.session_state:
-    st.session_state.prev_query = ""
 
+# 初始化 AI Client
 if "GOOGLE_API_KEY" in st.secrets:
-    # 這裡維持您原本的 genai.Client 語法
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     client = None
@@ -30,6 +30,7 @@ else:
 # ================= 2. 核心函式定義 =================
 
 def get_google_sheet():
+    """穩定連線 Google Sheets"""
     try:
         raw_json = st.secrets["GOOGLE_CREDENTIALS"]
         creds_info = json.loads(raw_json.strip(), strict=False)
@@ -41,11 +42,13 @@ def get_google_sheet():
         return None
 
 def save_to_log(user_input, ai_response, recommended_books):
+    """依照後台欄位對齊：Time, SessionID, Input, AI, Books, Feedback"""
     try:
         sheet = get_google_sheet()
         if sheet:
             tw_tz = pytz.timezone('Asia/Taipei')
             now_tw = datetime.datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+            # 寫入新紀錄，Feedback 欄位(第6欄)預設為空
             new_row = [now_tw, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
             sheet.append_row(new_row)
             return len(sheet.get_all_values())
@@ -54,6 +57,7 @@ def save_to_log(user_input, ai_response, recommended_books):
         return None
 
 def update_log_feedback():
+    """處理 👍/👎 回饋並觸發感謝彈窗"""
     row_idx = st.session_state.last_row_idx
     fb_key = f"fb_key_{row_idx}"
     if row_idx and fb_key in st.session_state:
@@ -62,15 +66,24 @@ def update_log_feedback():
             try:
                 sheet = get_google_sheet()
                 feedback_text = "👍" if score == 1 else "👎"
+                # 更新試算表第 6 欄
                 sheet.update_cell(row_idx, 6, feedback_text)
+                
+                # 手機版即時感謝通知
                 if score == 1:
-                    st.toast("感謝您的鼓勵！🌟", icon="❤️")
+                    st.toast("感謝您的鼓勵！我們會繼續為您挑選好書。🌟", icon="❤️")
                 else:
-                    st.toast("感謝您的回饋。", icon="📝")
+                    st.toast("感謝您的回饋，我們會持續進步。", icon="📝")
             except:
                 pass
 
 def get_recommendations(user_query):
+    """
+    雙層邏輯：
+    1. 判定是否為模糊提問 (Vague Query)
+    2. 明確提問：Top 15 相關度後按星等排序
+    3. 模糊提問：直接撈取高星等經典書
+    """
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         pinecone_key = st.secrets["PINECONE_API_KEY"]
@@ -87,45 +100,103 @@ def get_recommendations(user_query):
         fixed_embeddings = DimensionFixer(embeddings_model)
         vectorstore = PineconeVectorStore(index_name="gemini768", embedding=fixed_embeddings, pinecone_api_key=pinecone_key)
 
+        # --- 判定模糊提問 ---
         vague_keywords = ["推薦", "好書", "小學生", "繪本", "有什麼書", "介紹", "童書", "閱讀"]
+        # 判斷標準：字數極短 或 僅包含泛稱詞
         is_vague = len(user_query.strip()) <= 4 or user_query.strip() in vague_keywords
 
         if is_vague:
+            # 模糊提問策略：不比相關度，直接抓取資料庫中最推薦(Rating高)的書
+            # 我們先抓 50 本，然後在裡面挑 Rating 最高的
             raw_results = vectorstore.similarity_search(user_query, k=50)
-            candidate_books = [{"doc": d, "rating": float(d.metadata.get('Expert_Rating', 0))} for d in raw_results]
+            candidate_books = []
+            for d in raw_results:
+                candidate_books.append({
+                    "doc": d,
+                    "rating": float(d.metadata.get('Expert_Rating', 0))
+                })
+            # 依星等排序
             candidate_books.sort(key=lambda x: x['rating'], reverse=True)
             return [item["doc"] for item in candidate_books[:5]], True
+        
         else:
+            # 明確提問策略：先找 Top 15 相關，再依星等排序
             search_results = vectorstore.similarity_search_with_score(user_query, k=15)
-            candidate_books = [{"doc": doc, "rating": float(doc.metadata.get('Expert_Rating', 0)), "score": score} for doc, score in search_results]
+            candidate_books = []
+            for doc, score in search_results:
+                candidate_books.append({
+                    "doc": doc,
+                    "rating": float(doc.metadata.get('Expert_Rating', 0)),
+                    "score": score
+                })
+            # 排序：星等優先，分數次之
             candidate_books.sort(key=lambda x: (x['rating'], x['score']), reverse=True)
             return [item["doc"] for item in candidate_books[:5]], False
+
     except Exception as e:
         st.error(f"檢索系統異常: {e}")
         return None, False
 
-# ================= 3. UI 介面樣式 =================
+# ================= 3. UI 介面樣式 (視覺深度優化) =================
 
 st.markdown("""
     <style>
+    /* 隱藏預設元件 */
     #MainMenu, footer, header {visibility: hidden; height: 0;}
     div[data-testid="stStatusWidget"], .stAppViewFooter, [data-testid="stDecoration"], [data-testid="stHeader"] { display: none !important; }
     button[title="View fullscreen"] { display: none !important; }
+
+    /* 1. 側邊欄按鈕：橘色圓圈 + 白色反轉箭頭 (>>) */
     [data-testid="stSidebarCollapsedControl"] {
-        background-color: #E67E22 !important; border-radius: 50% !important;
-        width: 40px !important; height: 40px !important; left: 15px !important; top: 15px !important;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important; display: flex !important; align-items: center !important; justify-content: center !important;
+        background-color: #E67E22 !important;
+        border-radius: 50% !important;
+        width: 40px !important;
+        height: 40px !important;
+        left: 15px !important;
+        top: 15px !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
-    [data-testid="stSidebarCollapsedControl"] svg { fill: white !important; transform: scale(1.2); }
-    .stTextInput input:focus { border-color: #E67E22 !important; box-shadow: 0 0 0 1px #E67E22 !important; outline: none !important; }
-    .expert-suggestion-text { margin: 20px 0; line-height: 1.8; color: #34495E; font-size: 1.05rem; }
-    [data-testid="stFeedbackAdmonition"] { background-color: transparent !important; border: none !important; box-shadow: none !important; }
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: white !important;
+        transform: scale(1.2);
+    }
+
+    /* 2. 消除輸入框綠線：打字時保持橘色 */
+    .stTextInput input:focus {
+        border-color: #E67E22 !important;
+        box-shadow: 0 0 0 1px #E67E22 !important;
+        outline: none !important;
+    }
+    
+    /* 3. 專家建議：簡單純文字 */
+    .expert-suggestion-text {
+        margin: 20px 0;
+        line-height: 1.8;
+        color: #34495E;
+        font-size: 1.05rem;
+    }
+
+    /* 4. 移除問卷多餘灰色塊與陰影 */
+    [data-testid="stFeedbackAdmonition"] {
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    .feedback-container {
+        padding: 10px 0;
+        text-align: center;
+        margin-top: 20px;
+    }
+
+    /* 基礎控制 */
     .stTextInput input { border: 2px solid #E67E22 !important; border-radius: 25px !important; }
-    .feedback-container { padding: 10px 0; text-align: center; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# 側邊欄：計次、燈號、分享與問卷
+# 側邊欄：計次、燈號與問卷連結
 with st.sidebar:
     st.header("📊 ibookle 統計")
     total_answers = "---"
@@ -135,51 +206,19 @@ with st.sidebar:
         try:
             total_answers = len(sheet_data.get_all_values()) - 1
             system_status = "🟢 系統正常運作"
-        except: system_status = "🟡 系統忙碌中"
+        except:
+            system_status = "🟡 系統忙碌中"
     
     st.metric("已解答家長疑問", f"{total_answers} 次")
     st.write(system_status)
     st.divider()
-
-    # --- 常駐分享功能 ---
-    st.subheader("📤 儲存與分享報告")
-    has_res = st.session_state.search_results is not None
     
-    if has_res:
-        res = st.session_state.search_results
-        share_content = f"🌟 ibookle 專家選書報告 🌟\n📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n🔍 需求：{st.session_state.prev_query}\n\n💡 專家建議：\n{res['ai_response']}\n\n📚 書單：\n"
-        for i, book in enumerate(res["books"], 1):
-            share_content += f"{i}. 《{book['Title']}》 (⭐{book['Rating']})\n   🔗 {book['Link']}\n\n"
-        share_content += "--- 分享自 ibookle AI ---"
-    else:
-        share_content = "尚未生成報告，請先進行諮詢。"
-
-    if st.button("📋 生成分享文字 (Line/FB)", disabled=not has_res, use_container_width=True):
-        st.code(share_content, language=None)
-        st.toast("報告已生成！", icon="✨")
-
-    st.download_button(
-        label="📄 下載建議報告 (.txt)",
-        data=share_content,
-        file_name=f"ibookle_report.txt",
-        mime="text/plain",
-        use_container_width=True,
-        disabled=not has_res
-    )
-    st.divider()
-
-    # --- 常駐滿意度回饋 ---
-    st.subheader("🌟 滿意度回饋")
-    if st.session_state.last_row_idx:
-        fb_key = f"fb_key_{st.session_state.last_row_idx}"
-        st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
-        st.caption("您的回饋能讓專家建議更準確")
-    else:
-        st.caption("諮詢後即可在此提供回饋")
-    
-    st.divider()
+    # 側邊欄問卷連結區
     st.subheader("📢 意見回饋")
-    st.link_button("📝 填寫使用問卷", "https://your-google-form-link", use_container_width=True)
+    st.write("您的建議是我們進步的動力")
+    st.link_button("📝 填寫使用問卷", "https://childrening.pse.is/8jjrrl", use_container_width=True)
+    
+    st.divider()
     st.caption("© 2026 ibookle")
 
 # 主頁面
@@ -187,9 +226,9 @@ st.title("💡 ibookle 童書共讀專家")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
 st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的主題，我會為你挑選最適合的童書。")
 
-user_query = st.text_input("", placeholder="🔍 例如：想找關於克服分離焦慮的童書...", key="main_search")
+user_query = st.text_input("", placeholder="🔍 想找關於天氣的知識書，或是適合小學生的奇幻小說...", key="main_search")
 
-# ================= 4. 搜尋與生成邏輯 =================
+# ================= 4. 搜尋與生成邏輯 (稱謂修正與 Prompt 優化) =================
 
 if user_query and (not st.session_state.search_results or st.session_state.get("prev_query") != user_query):
     with st.spinner("🔍 正在為您翻閱書櫃並整理建議..."):
@@ -199,16 +238,35 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
             book_titles = [d.metadata.get('Title','未知') for d in results]
             titles_str = ", ".join(book_titles)
             
+            # 根據模式切換 Prompt
             if is_vague_mode:
-                prompt = f"使用者問了一個模糊的問題：\"{user_query}\"\n我們目前挑選了專家評分最高(三星)的經典書：{titles_str}\n\n請以 ibookle 專家身份回覆：\n1. 開頭請說「您好！」(禁止說家長您好)。\n2. 說明這個問題範圍較廣，因此您先準備了幾本「絕對不容錯過的專家首選」。\n3. 溫柔地詢問更多細節（如：孩子的年級、興趣、或特定的困擾）。\n4. 語氣親切，約 150 字，禁止使用表情符號。"
+                prompt = f"""
+                使用者問了一個模糊的問題："{user_query}"
+                我們目前挑選了專家評分最高(三星)的經典書：{titles_str}
+                
+                請以 ibookle 專家身份回覆：
+                1. 開頭請說「您好！」(禁止說家長您好)。
+                2. 說明這個問題範圍較廣，因此您先準備了幾本「絕對不容錯過的專家首選」。
+                3. 溫柔地詢問更多細節（如：孩子的年級、興趣、或特定的困擾）。
+                4. 語氣親切，約 150 字，禁止使用表情符號。
+                """
             else:
-                prompt = f"使用者需求：{user_query}\n相關精選童書：{titles_str}\n\n請以 ibookle 專家身份回覆：\n1. 開頭請說「您好！」(禁止說家長您好)。\n2. 簡述為什麼這幾本書適合目前的提問情境。\n3. 提到這些書是經過專家深度導讀後的精選建議。\n4. 語氣親切專業，約 150 字，禁止使用表情符號。"
+                prompt = f"""
+                使用者需求：{user_query}
+                相關精選童書：{titles_str}
+                
+                請以 ibookle 專家身份回覆：
+                1. 開頭請說「您好！」(禁止說家長您好)。
+                2. 簡述為什麼這幾本書適合目前的提問情境。
+                3. 提到這些書是經過專家深度導讀後的精選建議。
+                4. 語氣親切專業，約 150 字，禁止使用表情符號。
+                """
             
             try:
-                # 這裡若失敗會顯示具體原因
                 response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
                 ai_response = response.text
                 
+                # 存入 Session State (包含 Rating 資訊)
                 st.session_state.search_results = {
                     "ai_response": ai_response, 
                     "books": [{
@@ -224,11 +282,10 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
                 }
                 st.session_state.prev_query = user_query
                 st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
-                st.rerun() 
-            except Exception as e:
-                st.error(f"AI 專家目前連線不穩。錯誤原因: {e}")
+            except:
+                st.error("AI 專家目前連線不穩，請稍候。")
 
-# ================= 5. 結果顯示 =================
+# ================= 5. 結果顯示 (加入專家推薦標籤) =================
 
 if st.session_state.search_results:
     res = st.session_state.search_results
@@ -237,17 +294,91 @@ if st.session_state.search_results:
     st.markdown("### 📖 精選推薦清單")
     for b in res["books"]:
         with st.container():
-            header_text = f"《{b['Title']}》" + (" ✨ [專家首選]" if float(b['Rating']) >= 3.0 else "")
+            # 修改標題，如果星等為 3.0，加上特別標記
+            header_text = f"《{b['Title']}》"
+            if float(b['Rating']) >= 3.0:
+                header_text += " ✨ [專家首選]"
+            
             st.subheader(header_text)
             st.caption(f"✍️ 作者：{b['Author']} | 🏷️ 分類：{b['Category']} | ⭐ 推薦指數：{b['Rating']}")
-            if b['Quick_Summary']: st.info(b['Quick_Summary'])
-            with st.expander("🔍 點擊查看專家深度導讀"): st.markdown(b['Refine_Content'])
-            if b['Link']: st.link_button(f"🛒 前往購買", b['Link'], use_container_width=True)
+            
+            if b['Quick_Summary']: 
+                st.info(b['Quick_Summary'])
+                
+            with st.expander("🔍 點擊查看專家深度導讀"):
+                st.markdown(b['Refine_Content'])
+            
+            if b['Link']: 
+                st.link_button(f"🛒 前往購買《{b['Title']}》", b['Link'], use_container_width=True)
+        
         st.divider()
 
+import datetime
+
+# 檢查是否有搜尋結果
+if "search_results" in st.session_state and st.session_state.search_results:
+    res = st.session_state.search_results
+    
+    st.divider() # 視覺分割線
+    
+    # --- 建立分享內容字串 ---
+    # 1. 標題與 AI 的總結建議
+    share_content = f"🌟 ibookle 專家選書報告 🌟\n"
+    share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
+    share_content += f"🔍 您諮詢的需求：{user_query}\n\n"
+    share_content += f"💡 專家分析建議：\n{res['ai_response']}\n\n"
+    share_content += f"📚 精選推薦書單：\n"
+    
+    # 2. 迭代書籍清單
+    for i, book in enumerate(res["books"], 1):
+        share_content += f"{i}. 《{book['Title']}》\n"
+        share_content += f"   ⭐ 專家評分：{book['Rating']} / 3.0\n"
+        share_content += f"   📌 專業導讀：{book['Quick_Summary']}\n"
+        share_content += f"   🔗 連結：{book['Link']}\n\n"
+    
+    share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
+
+    # --- 顯示分享功能區塊 ---
+    st.subheader("📤 儲存與分享本次報告")
+    
+    col_copy, col_dl = st.columns(2)
+    
+    with col_copy:
+        # 使用 st.code 讓使用者容易點擊複製，或用按鈕觸發 toast
+        if st.button("📋 生成分享文字 (Line/FB)"):
+            st.info("下方文字已準備好，您可以直接長按複製分享給親友！")
+            st.code(share_content, language=None)
+            st.toast("報告已生成，準備好分享囉！", icon="✨")
+
+    with col_dl:
+        # 提供下載功能，讓家長存檔
+        st.download_button(
+            label="📄 下載為專家建議報告 (.txt)",
+            data=share_content,
+            file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
+            mime="text/plain",
+            help="將整份專家建議存成純文字檔，方便日後查看"
+        )
+
+    # 預留 Pro 版功能預覽 (增加計畫書說服力)
     with st.expander("🔒 進階功能 (Pro 版預覽)"):
         st.write("✨ **一鍵加入圖書館借閱清單**")
         st.write("✨ **同步至 Notion/Evernote 閱讀筆記**")
+        st.write("✨ **生成孩子專屬的知識成長分析圖表**")
+
+
+# ... (後續回饋與 footer 保持不變)
+
+    # 問卷回饋區 (透明背景)
+    if st.session_state.last_row_idx:
+        fb_key = f"fb_key_{st.session_state.last_row_idx}"
+        st.markdown('<div class="feedback-container">', unsafe_allow_html=True)
+        if fb_key not in st.session_state or st.session_state[fb_key] is None:
+            st.write("🌟 這份建議對您有幫助嗎？")
+        else:
+            st.write("✅ 感謝您的回饋，讓 ibookle 變得更好！")
+        st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
+        st.markdown('</div>', unsafe_allow_html=True)
 else:
     st.markdown("---")
     st.caption("👋 歡迎使用 ibookle！請描述孩子目前的狀況，讓專家為您挑選適合的童書。")
