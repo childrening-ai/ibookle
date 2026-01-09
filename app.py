@@ -273,28 +273,33 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
             book_titles = [d.metadata.get('Title','未知') for d in results]
             titles_str = ", ".join(book_titles)
             
-            # 根據模式切換 Prompt
+            # 根據模式切換 Prompt (溫馨夥伴風格)
             if is_vague_mode:
                 prompt = f"""
+                你現在是 ibookle 的共讀夥伴，一個溫暖、細心且讀過無數童書的 AI 助理。
                 使用者問了一個模糊的問題："{user_query}"
-                我們目前挑選了專家評分最高(三星)的經典書：{titles_str}
+                我們挑選了幾本經典好書：{titles_str}
                 
-                請以 ibookle 專家身份回覆：
-                1. 開頭請說「您好！」(禁止說家長您好)。
-                2. 說明這個問題範圍較廣，因此您先準備了幾本「絕對不容錯過的專家首選」。
-                3. 溫柔地詢問更多細節（如：孩子的年級、興趣、或特定的困擾）。
-                4. 語氣親切，約 150 字，禁止使用表情符號。
+                請遵循以下規則回覆：
+                1. 開頭請說「您好！」，語氣溫和有禮。
+                2. 說明這些書在許多家長的共讀經驗中評價很高，是很棒的入門選擇。
+                3. 溫柔地詢問更多細節（如：孩子的年級、目前的興趣），好讓你提供更精確的分享。
+                4. 最後一行輸出 [建議標籤：#標籤1 #標籤2 #標籤3]。
+                5. 約 150 字，禁止使用表情符號。
                 """
             else:
                 prompt = f"""
+                你現在是 ibookle 的共讀夥伴，一個溫暖、細心且讀過無數童書的 AI 助理。
                 使用者需求：{user_query}
-                相關精選童書：{titles_str}
+                相關書籍：{titles_str}
                 
-                請以 ibookle 專家身份回覆：
-                1. 開頭請說「您好！」(禁止說家長您好)。
-                2. 簡述為什麼這幾本書適合目前的提問情境。
-                3. 提到這些書是經過專家深度導讀後的精選建議。
-                4. 語氣親切專業，約 150 字，禁止使用表情符號。
+                請遵循以下規則回覆：
+                1. 開頭請說「您好！」，語氣溫和有禮。
+                2. 以分享立場出發，說明這幾本書為什麼常被提到適合目前的狀況。
+                3. 重點放在「可以怎麼互動」，例如跟孩子一起找細節或討論情節。
+                4. 若搜尋結果包含「無注音」但使用者要注音，請解釋：「這幾本雖然沒注音，但節奏感很好，非常適合作為睡前由您讀給孩子聽的床邊故事。」
+                5. 最後一行輸出 [建議標籤：#標籤1 #標籤2 #標籤3]。
+                6. 約 150 字，禁止使用表情符號。
                 """
             
             try:
@@ -324,15 +329,15 @@ if user_query and (not st.session_state.search_results or st.session_state.get("
 
 if st.session_state.search_results:
     res = st.session_state.search_results
-    st.markdown(f'<div class="expert-suggestion-text"><b>🤖 專家建議：</b><br>{res["ai_response"]}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="expert-suggestion-text"><b>💡 共讀夥伴分享：</b><br>{res["ai_response"]}</div>', unsafe_allow_html=True)
     
-    st.markdown("### 📖 精選推薦清單")
+    st.markdown("### 📖 為您準備的推薦書單")
     for b in res["books"]:
         with st.container():
             # 修改標題，如果星等為 3.0，加上特別標記
             header_text = f"《{b['Title']}》"
             if float(b['Rating']) >= 3.0:
-                header_text += " ✨ [專家首選]"
+                header_text += " ✨ [專家推薦]"
             
             st.subheader(header_text)
             st.caption(f"✍️ 作者：{b['Author']} | 🏷️ 分類：{b['Category']} | ⭐ 推薦指數：{b['Rating']}")
@@ -340,7 +345,7 @@ if st.session_state.search_results:
             if b['Quick_Summary']: 
                 st.info(b['Quick_Summary'])
                 
-            with st.expander("🔍 點擊查看專家深度導讀"):
+            with st.expander("💡 看看可以怎麼跟孩子一起讀"):
                 st.markdown(b['Refine_Content'])
             
             if b['Link']: 
