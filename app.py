@@ -79,59 +79,94 @@ def update_log_feedback():
 
 def get_recommendations(user_query):
     """
-    雙層邏輯：
-    1. 判定是否為模糊提問 (Vague Query)
-    2. 明確提問：Top 15 相關度後按星等排序
-    3. 模糊提問：直接撈取高星等經典書
+    優化後的雙軌檢索邏輯：
+    1. 書名精準比對 (Exact Title Match)
+    2. 條件式向量搜尋 (Metadata Filtering + Semantic Search)
+    3. 注音彈性降級 (Pinyin Relaxation)
     """
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         pinecone_key = st.secrets["PINECONE_API_KEY"]
+        
+        # 初始化 Embedding
         embeddings_model = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-001", 
             google_api_key=api_key, 
             task_type="retrieval_query"
         )
+        
+        # 維度修正與 VectorStore 初始化
         class DimensionFixer:
             def __init__(self, model): self.model = model
             def embed_query(self, text): return self.model.embed_query(text)[:768]
             def embed_documents(self, texts): return [v[:768] for v in self.model.embed_documents(texts)]
         
         fixed_embeddings = DimensionFixer(embeddings_model)
-        vectorstore = PineconeVectorStore(index_name="gemini768", embedding=fixed_embeddings, pinecone_api_key=pinecone_key)
+        vectorstore = PineconeVectorStore(
+            index_name="gemini768", 
+            embedding=fixed_embeddings, 
+            pinecone_api_key=pinecone_key
+        )
 
-        # --- 判定模糊提問 ---
+        # --- 第一軌：意圖解析與書名精準比對 ---
+        # 嘗試在標題欄位進行過濾（假設 Pinecone metadata 有 Title 欄位）
+        exact_match_results = vectorstore.similarity_search(
+            user_query, 
+            k=2, 
+            filter={"Title": {"$eq": user_query}}
+        )
+
+        # --- 第二軌：判定搜尋模式與初步過濾 ---
         vague_keywords = ["推薦", "好書", "小學生", "繪本", "有什麼書", "介紹", "童書", "閱讀"]
-        # 判斷標準：字數極短 或 僅包含泛稱詞
         is_vague = len(user_query.strip()) <= 4 or user_query.strip() in vague_keywords
-
-        if is_vague:
-            # 模糊提問策略：不比相關度，直接抓取資料庫中最推薦(Rating高)的書
-            # 我們先抓 50 本，然後在裡面挑 Rating 最高的
-            raw_results = vectorstore.similarity_search(user_query, k=50)
-            candidate_books = []
-            for d in raw_results:
-                candidate_books.append({
-                    "doc": d,
-                    "rating": float(d.metadata.get('Expert_Rating', 0))
-                })
-            # 依星等排序
-            candidate_books.sort(key=lambda x: x['rating'], reverse=True)
-            return [item["doc"] for item in candidate_books[:5]], True
         
+        # 這裡我們可以先根據 user_query 解析出是否有「注音」關鍵字
+        needs_pinyin = "注音" in user_query and "不" not in user_query
+        
+        final_candidates = []
+        
+        if is_vague:
+            # 模糊模式：抓取高星等
+            raw_results = vectorstore.similarity_search(user_query, k=20)
+            for d in raw_results:
+                final_candidates.append({
+                    "doc": d,
+                    "rating": float(d.metadata.get('Expert_Rating', 0)),
+                    "has_pinyin": d.metadata.get('注音標籤') == "有注音"
+                })
+            final_candidates.sort(key=lambda x: x['rating'], reverse=True)
         else:
-            # 明確提問策略：先找 Top 15 相關，再依星等排序
+            # 明確模式：權重檢索
+            # 先抓多一點 (k=15) 用於後續的注音篩選排序
             search_results = vectorstore.similarity_search_with_score(user_query, k=15)
-            candidate_books = []
             for doc, score in search_results:
-                candidate_books.append({
+                final_candidates.append({
                     "doc": doc,
                     "rating": float(doc.metadata.get('Expert_Rating', 0)),
-                    "score": score
+                    "score": score,
+                    "has_pinyin": doc.metadata.get('注音標籤') == "有注音"
                 })
-            # 排序：星等優先，分數次之
-            candidate_books.sort(key=lambda x: (x['rating'], x['score']), reverse=True)
-            return [item["doc"] for item in candidate_books[:5]], False
+            
+            # --- 邏輯：注音彈性排序 ---
+            # 如果使用者要求注音，我們將「有注音」且「相關度高」的往前排
+            if needs_pinyin:
+                final_candidates.sort(key=lambda x: (x['has_pinyin'], x['score']), reverse=True)
+            else:
+                final_candidates.sort(key=lambda x: (x['rating'], x['score']), reverse=True)
+
+        # --- 整合結果 ---
+        # 1. 將書名精確符合的放在最前面
+        final_docs = [doc for doc in exact_match_results]
+        
+        # 2. 補足後續結果 (去重)
+        existing_titles = [d.metadata.get('Title') for d in final_docs]
+        for item in final_candidates:
+            if len(final_docs) >= 5: break
+            if item["doc"].metadata.get('Title') not in existing_titles:
+                final_docs.append(item["doc"])
+                existing_titles.append(item["doc"].metadata.get('Title'))
+
+        return final_docs, is_vague
 
     except Exception as e:
         st.error(f"檢索系統異常: {e}")
