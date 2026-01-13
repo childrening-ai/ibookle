@@ -205,23 +205,34 @@ def layer_2_google_verification(query):
     except: return {"type": "concept"}
 
 def layer_4_vector_search(query, constraints):
-    """Layer 4: 雙軌搜尋 (Max Strategy + 004 Model + Retrieval Query)"""
+    """Layer 4: 雙軌搜尋 (嚴格型別版 - 確保 Task Type 生效)"""
     q_vec = []
     try:
-        # ⚠️ 關鍵設定：搜尋時必須用 RETRIEVAL_QUERY
+        # ✨ 修正 1：引入 types 以確保 config 生效
+        from google.genai import types 
+        
+        # ✨ 修正 2：使用 types.EmbedContentConfig
+        # 這是最關鍵的一步！確保搜尋向量是「鑰匙 (QUERY)」形狀
         response = client.models.embed_content(
-            model="text-embedding-004",  
+            model="text-embedding-004",
             contents=query,
-            config={'task_type': 'RETRIEVAL_QUERY'}
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY" 
+            )
         )
         q_vec = response.embeddings[0].values
-        if len(q_vec) != 768: q_vec = q_vec[:768]
+        
+        # 確保維度正確
+        if len(q_vec) != 768: 
+            q_vec = q_vec[:768]
+            
     except Exception as e:
         return [], f"向量生成失敗: {e}"
 
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("gemini768")
+        # 搜尋 Shell 與 Core
         res_shell = index.query(vector=q_vec, top_k=50, namespace="shell", include_metadata=True)
         res_core = index.query(vector=q_vec, top_k=50, namespace="core", include_metadata=True)
     except Exception as e:
@@ -229,9 +240,13 @@ def layer_4_vector_search(query, constraints):
 
     # Max Strategy 融合
     candidates = {}
+    
+    # 處理 Shell
     if res_shell.matches:
         for match in res_shell.matches:
             candidates[match.id] = {"doc": match, "score": match.score}
+
+    # 處理 Core
     if res_core.matches:
         for match in res_core.matches:
             if match.id in candidates: 
@@ -241,13 +256,14 @@ def layer_4_vector_search(query, constraints):
 
     all_books = list(candidates.values())
     
-    # 診斷顯示
+    # --- 診斷顯示 (方便您確認) ---
     if st.session_state.get("show_debug", False):
-        st.sidebar.markdown("### 🛠️ 向量診斷")
+        st.sidebar.markdown("### 🛠️ 向量診斷 (Strict)")
         if all_books:
             top_3 = sorted(all_books, key=lambda x: x["score"], reverse=True)[:3]
             for b in top_3:
                 st.sidebar.write(f"- {b['doc'].metadata.get('Title')}: **{b['score']:.4f}**")
+    # ------------------
 
     # Layer 3 規格過濾
     filtered_books = []
