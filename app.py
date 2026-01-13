@@ -9,6 +9,7 @@ from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from pinecone import Pinecone
 from rapidfuzz import process, fuzz
 
+
 # ================= 1. 初始化與環境配置 =================
 load_dotenv()
 
@@ -213,63 +214,107 @@ def layer_2_google_verification(query):
         return json.loads(response.text.replace("```json", "").replace("```", ""))
     except: return {"type": "concept"}
 
-def layer_4_vector_search(query, constraints):
-    """Layer 4: 雙軌搜尋 + 規格過濾"""
-    # 1. 產生向量
-    for _ in range(3):
-        try:
-            emb = client.models.embed_content(model="models/text-embedding-004", contents=query)
-            q_vec = emb.embeddings[0].values
-            break
-        except: time.sleep(1)
-    else: return [], "AI 連線忙碌中"
+# ==========================================
+# 請將這一段完全覆蓋原本的 layer_4_vector_search
+# ==========================================
 
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-    index = pc.Index("gemini768")
-    
-    # 2. 雙軌搜尋 (Shell + Core)
-    res_shell = index.query(vector=q_vec, top_k=40, namespace="shell", include_metadata=True)
-    res_core = index.query(vector=q_vec, top_k=40, namespace="core", include_metadata=True)
-    
-    # 3. 加權融合
+def layer_4_vector_search(query, constraints):
+    """
+    Layer 4: 雙軌搜尋 (完全配合上傳程式的 google.genai 原生寫法)
+    """
+    # 1. 產生向量 (使用跟上傳程式一模一樣的邏輯)
+    q_vec = []
+    try:
+        # ⚠️ 關鍵修正：這裡不加 task_type，完全模擬您上傳時的行為
+        response = client.models.embed_content(
+            model="models/text-embedding-004",
+            contents=query
+        )
+        q_vec = response.embeddings[0].values
+        
+        # 安全檢查：確認維度是 768
+        if len(q_vec) != 768:
+            print(f"⚠️ 警告：向量維度異常 ({len(q_vec)})")
+            # 如果維度跑掉 (例如變 1536)，嘗試切片 (這是最後的保險)
+            q_vec = q_vec[:768]
+            
+    except Exception as e:
+        print(f"Embedding Error: {e}")
+        return [], f"AI 連線錯誤: {e}"
+
+    # 2. 連線 Pinecone
+    try:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index("gemini768")
+        
+        # 3. 執行雙軌搜尋
+        # 這裡我們把 top_k 拉高到 50，確保過濾後還有剩
+        res_shell = index.query(vector=q_vec, top_k=50, namespace="shell", include_metadata=True)
+        res_core = index.query(vector=q_vec, top_k=50, namespace="core", include_metadata=True)
+        
+    except Exception as e:
+        return [], f"資料庫讀取錯誤: {e}"
+
+    # 4. 加權融合 (Hybrid Fusion)
     candidates = {}
-    for match in res_shell.matches:
-        candidates[match.id] = {"doc": match, "score": match.score * 0.5}
-    for match in res_core.matches:
-        if match.id in candidates: candidates[match.id]["score"] += match.score * 0.5
-        else: candidates[match.id] = {"doc": match, "score": match.score * 0.5}
+    
+    # 融合 Shell (趣味性)
+    if res_shell.matches:
+        for match in res_shell.matches:
+            candidates[match.id] = {"doc": match, "score": match.score * 0.5}
+            
+    # 融合 Core (教育性)
+    if res_core.matches:
+        for match in res_core.matches:
+            if match.id in candidates: 
+                candidates[match.id]["score"] += match.score * 0.5
+            else: 
+                candidates[match.id] = {"doc": match, "score": match.score * 0.5}
 
     all_books = list(candidates.values())
     
-    # 4. 應用 Layer 3 濾網 (Smart Filter)
+    # Debug: 如果連這裡都沒書，代表向量真的完全沒對上
+    if not all_books:
+        print(f"DEBUG: 搜尋 '{query}' 回傳 0 筆。向量長度: {len(q_vec)}")
+        return [], "找不到相關書籍 (向量未命中)"
+
+    # 5. 應用 Layer 3 濾網 (Smart Filter)
     filtered_books = []
     for item in all_books:
         meta = item["doc"].metadata or {}
         
-        # 年齡過濾
+        # (A) 年齡過濾
         if constraints["age_range"]:
             if not check_age_overlap(constraints["age_range"], meta.get("適讀年齡", "")): continue
 
-        # 注音過濾
+        # (B) 注音過濾
         if constraints["pinyin"] is not None:
             has_pinyin = (meta.get("注音標籤") == "有注音")
             if constraints["pinyin"] != has_pinyin: continue
 
-        # 分類過濾
+        # (C) 分類過濾
         if constraints["category"]:
             book_cat = str(meta.get("型式", "")) + str(meta.get("Category", ""))
             if constraints["category"] not in book_cat: continue
             
         filtered_books.append(item)
     
-    # 5. 例外處理
+    # 6. 例外處理 (Fallback)
+    # 如果篩選太嚴格導致沒書，就退回到「原本最相關的書」(all_books)
     final_list = filtered_books
     system_msg = ""
+    
     if not final_list:
-        system_msg = "（找不到完全符合條件的書籍，已為您放寬搜尋條件）"
-        final_list = all_books # Fallback
+        if all_books:
+            system_msg = "（找不到符合所有條件的書，已為您顯示內容最相關的推薦）"
+            final_list = all_books 
+        else:
+            return [], "抱歉，真的找不到書。"
 
+    # 依分數排序
     final_list.sort(key=lambda x: x["score"], reverse=True)
+    
+    # 回傳前 5 名
     return [x["doc"] for x in final_list[:5]], system_msg
 
 # ================= 5. 主控制器 =================
