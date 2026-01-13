@@ -198,20 +198,20 @@ def layer_2_google_verification(query):
 
 def layer_4_vector_search(query, constraints):
     """
-    Layer 4: 雙軌搜尋 (已修正模型名稱，完全對齊上傳端)
+    Layer 4: 雙軌搜尋 - 擇優錄取版 (Max Strategy)
+    不進行內部加權，直接採用該書在任一軌道中的最高分，作為該書的總相關度。
     """
     q_vec = []
     try:
-        # ⚠️ 修正：移除 models/ 前綴，確保與上傳程式 100% 一致
+        # 1. 產生向量 (完全配合上傳程式，不加額外參數)
         response = client.models.embed_content(
-            model="text-embedding-004",  
+            model="text-embedding-004",
             contents=query
         )
         q_vec = response.embeddings[0].values
         
-        # 安全網：如果維度跑掉，嘗試切片
+        # 維度防呆
         if len(q_vec) != 768:
-            print(f"⚠️ 向量維度異常: {len(q_vec)}")
             q_vec = q_vec[:768]
             
     except Exception as e:
@@ -221,9 +221,7 @@ def layer_4_vector_search(query, constraints):
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("gemini768")
         
-        # ⚠️ 診斷模式：如果開啟，顯示 Raw Score
-        show_debug = st.session_state.get("show_debug", False)
-
+        # 2. 雙軌搜尋 (各抓 50 本，確保足夠數量進濾網)
         res_shell = index.query(vector=q_vec, top_k=50, namespace="shell", include_metadata=True)
         res_core = index.query(vector=q_vec, top_k=50, namespace="core", include_metadata=True)
         
@@ -232,63 +230,83 @@ def layer_4_vector_search(query, constraints):
 
     candidates = {}
     
-    # 融合 Shell (Shell 結果優先)
+    # 3. 融合邏輯：擇優錄取 (Take the Max)
+    
+    # 先放入 Shell 的結果
     if res_shell.matches:
         for match in res_shell.matches:
-            candidates[match.id] = {"doc": match, "score": match.score * 0.5}
+            candidates[match.id] = {
+                "doc": match, 
+                "score": match.score # 直接用原始高分
+            }
 
-    # 融合 Core
+    # 再放入 Core 的結果
     if res_core.matches:
         for match in res_core.matches:
             if match.id in candidates: 
-                candidates[match.id]["score"] += match.score * 0.5
+                # 如果這本書已經在 Shell 被抓到了，我們比較兩邊的分數，保留高的那個
+                if match.score > candidates[match.id]["score"]:
+                    candidates[match.id]["score"] = match.score
+                    # 注意：這裡我們通常保留原本的 doc 內容即可，因為 metadata 是一樣的
             else: 
-                candidates[match.id] = {"doc": match, "score": match.score * 0.5}
+                # 如果這本書只在 Core 被抓到，直接加入
+                candidates[match.id] = {
+                    "doc": match, 
+                    "score": match.score
+                }
 
     all_books = list(candidates.values())
     
-    # --- Debug 資訊 ---
+    # --- Debug 診斷 (現在應該會看到 0.8~0.9 的高分) ---
     if st.session_state.get("show_debug", False):
-        st.sidebar.markdown("### 🛠️ 向量診斷")
+        st.sidebar.markdown("### 🛠️ 向量診斷 (Max模式)")
         st.sidebar.write(f"Shell 命中: {len(res_shell.matches)}")
         st.sidebar.write(f"Core 命中: {len(res_core.matches)}")
         if all_books:
-             # 顯示最高分的 3 本書分數
             top_3 = sorted(all_books, key=lambda x: x["score"], reverse=True)[:3]
-            st.sidebar.write("🏆 Top 3 Raw Scores:")
+            st.sidebar.write("🏆 Top 3 Max Scores:")
             for b in top_3:
                 st.sidebar.write(f"- {b['doc'].metadata.get('Title')}: **{b['score']:.4f}**")
     # ------------------
     
-    # 應用 Layer 3 濾網
+    # 4. 應用 Layer 3 濾網 (Filter)
     filtered_books = []
     for item in all_books:
         meta = item["doc"].metadata or {}
         
+        # (A) 年齡過濾
         if constraints["age_range"]:
             if not check_age_overlap(constraints["age_range"], meta.get("適讀年齡", "")): continue
 
+        # (B) 注音過濾
         if constraints["pinyin"] is not None:
             has_pinyin = (meta.get("注音標籤") == "有注音")
             if constraints["pinyin"] != has_pinyin: continue
 
+        # (C) 分類過濾
         if constraints["category"]:
             book_cat = str(meta.get("型式", "")) + str(meta.get("Category", ""))
             if constraints["category"] not in book_cat: continue
             
         filtered_books.append(item)
     
-    # Fallback
+    # 5. 例外處理 (Fallback)
     final_list = filtered_books
     system_msg = ""
+    
     if not final_list:
         if all_books:
-            system_msg = "（找不到符合條件的書，顯示最相關推薦）"
+            # 沒通過濾網，但有相關書 -> 顯示相關書 (放寬標準)
+            system_msg = "（找不到完全符合條件的書，為您推薦內容最相關的書籍）"
             final_list = all_books 
         else:
-            return [], "抱歉，真的找不到書。"
+            # 連相關書都沒有
+            return [], "抱歉，找不到相關書籍。"
 
+    # 6. 排序：這就是您要的「書與書之間的比較」
+    # 分數高的排前面 (無論它是靠故事贏的，還是靠知識贏的)
     final_list.sort(key=lambda x: x["score"], reverse=True)
+    
     return [x["doc"] for x in final_list[:5]], system_msg
 
 # ================= 5. 主控制器 =================
