@@ -20,6 +20,7 @@ if "session_id" not in st.session_state: st.session_state.session_id = str(uuid.
 if "search_results" not in st.session_state: st.session_state.search_results = None
 if "last_row_idx" not in st.session_state: st.session_state.last_row_idx = None
 if "prev_query" not in st.session_state: st.session_state.prev_query = ""
+if "current_search_id" not in st.session_state: st.session_state.current_search_id = str(uuid.uuid4())
 if "show_debug" not in st.session_state: st.session_state.show_debug = False
 
 # API Key 設定
@@ -32,7 +33,7 @@ else:
     st.error("❌ 未偵測到 GOOGLE_API_KEY")
     st.stop()
 
-# ================= 2. 資料快取 & Google Sheet (整合版) =================
+# ================= 2. 資料快取 & Google Sheet =================
 
 @st.cache_resource
 def get_cache():
@@ -87,7 +88,7 @@ def get_google_sheet():
     except: return None
 
 def save_to_log(user_input, ai_response, recommended_books, result_type="BOOK_LIST"):
-    """寫入 Log (包含 result_type)"""
+    """寫入 Log"""
     try:
         sheet = get_google_sheet()
         if sheet:
@@ -100,21 +101,26 @@ def save_to_log(user_input, ai_response, recommended_books, result_type="BOOK_LI
     except: return None
 
 def update_log_feedback():
-    """處理按讚/倒讚回饋"""
-    row_idx = st.session_state.last_row_idx
-    fb_key = f"fb_key_{row_idx}"
-    if row_idx and fb_key in st.session_state:
+    """處理按讚/倒讚回饋 (已修復：確保按鈕始終可見)"""
+    # 這裡使用 current_search_id 作為 Key 的一部分，確保每次搜尋都有獨立的 feedback 狀態
+    search_id = st.session_state.current_search_id
+    fb_key = f"fb_key_{search_id}"
+    
+    if fb_key in st.session_state:
         score = st.session_state[fb_key]
         if score is not None:
-            try:
-                sheet = get_google_sheet()
-                # 寫入第 6 欄 (Feedback)
-                sheet.update_cell(row_idx, 6, "👍" if score == 1 else "👎")
-                if score == 1:
-                    st.toast("感謝您的鼓勵！我們會繼續為您挑選好書。🌟", icon="❤️")
-                else:
-                    st.toast("感謝您的回饋，我們會持續進步。", icon="📝")
-            except: pass
+            # 嘗試寫入 Google Sheet (如果有 row_idx)
+            if st.session_state.last_row_idx:
+                try:
+                    sheet = get_google_sheet()
+                    sheet.update_cell(st.session_state.last_row_idx, 6, "👍" if score == 1 else "👎")
+                except: pass
+            
+            # 顯示 Toast
+            if score == 1:
+                st.toast("感謝您的鼓勵！我們會繼續為您挑選好書。🌟", icon="❤️")
+            else:
+                st.toast("感謝您的回饋，我們會持續進步。", icon="📝")
 
 # ================= 3. 搜尋邏輯核心 (Layer 0-4 Max Strategy) =================
 
@@ -199,13 +205,14 @@ def layer_2_google_verification(query):
     except: return {"type": "concept"}
 
 def layer_4_vector_search(query, constraints):
-    """Layer 4: 雙軌搜尋 (Max Strategy + 004 Model)"""
+    """Layer 4: 雙軌搜尋 (Max Strategy + 004 Model + Retrieval Query)"""
     q_vec = []
     try:
-        # 產生向量 (不加 task_type 以配合通用上傳)
+        # ⚠️ 關鍵設定：搜尋時必須用 RETRIEVAL_QUERY
         response = client.models.embed_content(
             model="text-embedding-004",  
-            contents=query
+            contents=query,
+            config={'task_type': 'RETRIEVAL_QUERY'}
         )
         q_vec = response.embeddings[0].values
         if len(q_vec) != 768: q_vec = q_vec[:768]
@@ -296,9 +303,7 @@ def get_recommendations_vFinal(user_query):
 
     return [], "Error", "ERROR"
 
-# ================= 5. UI 介面 (融合舊版豐富功能) =================
-
-# ================= 5. UI 介面 (CSS 樣式 100% 復刻) =================
+# ================= 5. UI 介面 (100% 復刻舊版樣式) =================
 
 st.markdown("""
     <style>
@@ -383,6 +388,9 @@ user_query = st.text_input("", placeholder="🔍 例如：想找關於天氣的�
 # 搜尋觸發
 if user_query and (not st.session_state.search_results or st.session_state.prev_query != user_query):
     with st.spinner("🔍 專家正在分析您的需求..."):
+        # 產生新的 Search ID 確保 Feedback Key 唯一
+        st.session_state.current_search_id = str(uuid.uuid4())
+        
         results, sys_msg, result_type = get_recommendations_vFinal(user_query)
         
         search_data = {"type": result_type, "query": user_query, "sys_msg": sys_msg, "data": results}
@@ -447,14 +455,14 @@ if st.session_state.search_results:
                     with st.expander("💡 看看可以怎麼跟孩子一起讀"):
                         st.markdown(meta.get('Refine_Content', '暫無導讀資料'))
                     
-                    # 購書連結
+                    # ✨ 購書連結 (您要的功能回來了！)
                     link = meta.get('Link')
-                    if link and str(link).strip():
+                    if link and str(link).strip() and str(link) != "nan":
                         st.link_button(f"🛒 前往購買《{title}》", link, use_container_width=True)
                 
                 st.divider()
 
-            # --- 分享與下載區塊 (從舊版移植) ---
+            # --- 分享與下載區塊 ---
             st.subheader("📤 儲存與分享本次報告")
             
             share_content = f"🌟 ibookle 專家選書報告 🌟\n"
@@ -471,6 +479,7 @@ if st.session_state.search_results:
             with c1:
                 if st.button("📋 複製分享文字"):
                     st.code(share_content, language=None)
+                    st.toast("文字已複製！")
             with c2:
                 st.download_button("📄 下載報告", share_content, f"ibookle_report.txt")
 
@@ -494,16 +503,16 @@ if st.session_state.search_results:
         st.markdown("---")
         st.write("雖然館藏無此書，但您可以參考網路資訊。")
 
-    # --- 滿意度回饋 (舊版功能) ---
-    if st.session_state.last_row_idx:
-        fb_key = f"fb_key_{st.session_state.last_row_idx}"
-        st.markdown('<div class="feedback-container">', unsafe_allow_html=True)
-        if fb_key not in st.session_state or st.session_state[fb_key] is None:
-            st.write("🌟 這份建議對您有幫助嗎？")
-        else:
-            st.write("✅ 感謝您的回饋！")
-        st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
-        st.markdown('</div>', unsafe_allow_html=True)
+    # --- 滿意度回饋 (已修復，必定顯示) ---
+    fb_key = f"fb_key_{st.session_state.current_search_id}"
+    st.markdown('<div class="feedback-container">', unsafe_allow_html=True)
+    if fb_key not in st.session_state or st.session_state[fb_key] is None:
+        st.write("🌟 這份建議對您有幫助嗎？")
+    else:
+        st.write("✅ 感謝您的回饋！")
+    
+    st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 else:
     st.caption("© 2026 ibookle")
