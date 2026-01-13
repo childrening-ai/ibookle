@@ -1,63 +1,114 @@
 import streamlit as st
-import json, os, datetime, gspread, uuid, pytz
+import jieba
+import json, os, datetime, gspread, uuid, pytz, re, time
 import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 from google import genai
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_pinecone import PineconeVectorStore
+from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
+from pinecone import Pinecone
+from rapidfuzz import process, fuzz
 
 # ================= 1. 初始化與環境配置 =================
 load_dotenv()
 
-# 設定頁面屬性
 st.set_page_config(page_title="ibookle 童書專家", layout="wide", initial_sidebar_state="collapsed")
 
 # 初始化 Session State
-if "session_id" not in st.session_state: 
-    st.session_state.session_id = str(uuid.uuid4())[:8]
-if "search_results" not in st.session_state:
-    st.session_state.search_results = None
-if "last_row_idx" not in st.session_state:
-    st.session_state.last_row_idx = None
+if "session_id" not in st.session_state: st.session_state.session_id = str(uuid.uuid4())[:8]
+if "search_results" not in st.session_state: st.session_state.search_results = None
+if "last_row_idx" not in st.session_state: st.session_state.last_row_idx = None
+if "prev_query" not in st.session_state: st.session_state.prev_query = ""
 
-# 初始化 AI Client
-if "GOOGLE_API_KEY" in st.secrets:
-    client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+# API Key 設定
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
+PINECONE_API_KEY = st.secrets.get("PINECONE_API_KEY", os.getenv("PINECONE_API_KEY"))
+
+if GOOGLE_API_KEY:
+    client = genai.Client(api_key=GOOGLE_API_KEY)
 else:
-    client = None
+    st.error("❌ 未偵測到 GOOGLE_API_KEY")
+    st.stop()
 
-# ================= 2. 核心函式定義 =================
+# ================= 2. 資料快取 (Layer 0 & 1) =================
+
+@st.cache_resource
+def get_cache():
+    """載入 CSV 並自動挖掘關鍵字建立強力白名單"""
+    cache = {"whitelist_tags": set(), "all_book_titles": [], "all_creators": []}
+    try:
+        if os.path.exists("book_data.csv"):
+            df = pd.read_csv("book_data.csv")
+            
+            # 1. 基礎與進階挖掘 (Jieba)
+            tags = set()
+            # 合併所有可能的文字欄位
+            content_text = ""
+            if "Merged_Keywords" in df.columns:
+                 content_text += " ".join(df["Merged_Keywords"].dropna().astype(str).tolist()) + " "
+            if "Vector_Story_Fun" in df.columns:
+                content_text += " ".join(df["Vector_Story_Fun"].dropna().astype(str).tolist()) + " "
+            if "Vector_Edu_Function" in df.columns:
+                content_text += " ".join(df["Vector_Edu_Function"].dropna().astype(str).tolist())
+            
+            # 定義停用詞
+            stop_words = {
+                "跟著", "就此", "而是", "只是", "還有", "讓人", "不僅", "作為", 
+                "透過", "雖然", "但是", "因為", "所以", "如果", "其實", "然後",
+                "書中", "本書", "內容", "描繪", "介紹", "帶領", "展開"
+            }
+
+            if content_text:
+                words = jieba.cut(content_text)
+                for w in words:
+                    if len(w) > 1 and w.strip() and w not in stop_words: 
+                        tags.add(w)
+
+            # 加入人工補強通用詞
+            tags.update(["恐龍", "友誼", "上學", "科學", "宇宙", "昆蟲", "繪本", "橋樑書", "漫畫", "好書", "推薦", "注音", "大班", "中班", "小班"])
+            cache["whitelist_tags"] = tags
+            print(f"✅ 白名單建立完成，共 {len(tags)} 個詞")
+
+            # 2. 建立書名與創作者清單
+            if "Title" in df.columns:
+                cache["all_book_titles"] = df["Title"].dropna().astype(str).tolist()
+            
+            creators = set()
+            if "Author" in df.columns: creators.update(df["Author"].dropna().astype(str).tolist())
+            if "Illustrator" in df.columns: creators.update(df["Illustrator"].dropna().astype(str).tolist())
+            cache["all_creators"] = list(creators)
+        else:
+            cache["whitelist_tags"] = {"恐龍", "學校", "繪本"}
+    except Exception as e:
+        print(f"Cache Error: {e}")
+    return cache
+
+CACHE = get_cache()
+
+# ================= 3. Google Sheet 紀錄 =================
 
 def get_google_sheet():
-    """穩定連線 Google Sheets"""
     try:
-        raw_json = st.secrets["GOOGLE_CREDENTIALS"]
-        creds_info = json.loads(raw_json.strip(), strict=False)
-        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        client_gs = gspread.authorize(creds)
-        return client_gs.open("AI_User_Logs").worksheet("Brief_Logs")
-    except:
-        return None
+        if "GOOGLE_CREDENTIALS" in st.secrets:
+            raw_json = st.secrets["GOOGLE_CREDENTIALS"]
+            creds_info = json.loads(raw_json.strip(), strict=False)
+            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+            return gspread.authorize(creds).open("AI_User_Logs").worksheet("Brief_Logs")
+    except: return None
 
-def save_to_log(user_input, ai_response, recommended_books):
-    """依照後台欄位對齊：Time, SessionID, Input, AI, Books, Feedback"""
+def save_to_log(user_input, ai_response, recommended_books, result_type="BOOK_LIST"):
     try:
         sheet = get_google_sheet()
         if sheet:
             tw_tz = pytz.timezone('Asia/Taipei')
             now_tw = datetime.datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
-            # 寫入新紀錄，Feedback 欄位(第6欄)預設為空
-            new_row = [now_tw, st.session_state.session_id, user_input, ai_response, recommended_books, ""]
+            new_row = [now_tw, st.session_state.session_id, user_input, ai_response, recommended_books, "", result_type]
             sheet.append_row(new_row)
             return len(sheet.get_all_values())
-        return None
-    except:
-        return None
+    except: return None
 
 def update_log_feedback():
-    """處理 👍/👎 回饋並觸發感謝彈窗"""
     row_idx = st.session_state.last_row_idx
     fb_key = f"fb_key_{row_idx}"
     if row_idx and fb_key in st.session_state:
@@ -65,362 +116,285 @@ def update_log_feedback():
         if score is not None:
             try:
                 sheet = get_google_sheet()
-                feedback_text = "👍" if score == 1 else "👎"
-                # 更新試算表第 6 欄
-                sheet.update_cell(row_idx, 6, feedback_text)
-                
-                # 手機版即時感謝通知
-                if score == 1:
-                    st.toast("感謝您的鼓勵！我們會繼續為您挑選好書。🌟", icon="❤️")
-                else:
-                    st.toast("感謝您的回饋，我們會持續進步。", icon="📝")
-            except:
-                pass
+                sheet.update_cell(row_idx, 6, "👍" if score == 1 else "👎")
+                st.toast("感謝您的鼓勵！" if score == 1 else "感謝回饋！", icon="❤️" if score == 1 else "📝")
+            except: pass
 
-def get_recommendations(user_query):
-    """
-    優化後的雙軌檢索邏輯：
-    1. 書名精準比對 (Exact Title Match)
-    2. 條件式向量搜尋 (Metadata Filtering + Semantic Search)
-    3. 注音彈性降級 (Pinyin Relaxation)
+# ================= 4. 核心搜尋邏輯 (Layer 0 - 4) =================
+
+def check_age_overlap(user_range, book_age_str):
+    if not user_range or not book_age_str: return True
+    try:
+        nums = re.findall(r"\d+", str(book_age_str))
+        if not nums: return True
+        b_min = int(nums[0])
+        b_max = int(nums[1]) if len(nums) > 1 else 99
+        u_min, u_max = user_range
+        return not (u_max < b_min or u_min > b_max)
+    except: return True
+
+def extract_constraints_with_ai(query):
+    """Layer 3: 使用 Gemini 進行精準語意解析"""
+    prompt = f"""
+    你是 ibookle 的圖書館管理員。請分析：「{query}」
+    回傳純 JSON：
+    1. age_range (list[int] | null): 轉為數字區間 [min, max]。如 "小二"->[7,8], "幼兒"->[3,6]。
+    2. pinyin (bool | null): 明確要注音->true, 不要/無/沒注音->false, 未提->null。
+    3. category (str | null): 僅限輸出: "繪本", "漫畫", "橋樑書", "科普圖鑑", "少年小說"。請自動歸類。
     """
     try:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-        pinecone_key = st.secrets["PINECONE_API_KEY"]
-        
-        # 初始化 Embedding
-        embeddings_model = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-001", 
-            google_api_key=api_key, 
-            task_type="retrieval_query"
+        response = client.models.generate_content(
+            model='gemini-2.0-flash', contents=prompt,
+            config=GenerateContentConfig(response_mime_type="application/json")
         )
-        
-        # 維度修正與 VectorStore 初始化
-        class DimensionFixer:
-            def __init__(self, model): self.model = model
-            def embed_query(self, text): return self.model.embed_query(text)[:768]
-            def embed_documents(self, texts): return [v[:768] for v in self.model.embed_documents(texts)]
-        
-        fixed_embeddings = DimensionFixer(embeddings_model)
-        vectorstore = PineconeVectorStore(
-            index_name="gemini768", 
-            embedding=fixed_embeddings, 
-            pinecone_api_key=pinecone_key
-        )
+        c = json.loads(response.text)
+        if c.get("age_range"): c["age_range"] = tuple(c["age_range"])
+        return c
+    except: return {"age_range": None, "pinyin": None, "category": None}
 
-        # --- 第一軌：意圖解析與書名精準比對 ---
-        # 嘗試在標題欄位進行過濾（假設 Pinecone metadata 有 Title 欄位）
-        exact_match_results = vectorstore.similarity_search(
-            user_query, 
-            k=2, 
-            filter={"Title": {"$eq": user_query}}
-        )
+def layer_0_direct_hit(query):
+    """Layer 0: 直通車"""
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    index = pc.Index("gemini768")
+    
+    # ISBN
+    clean_query = query.replace("-", "").strip()
+    if clean_query.isdigit() and len(clean_query) in [10, 13]:
+        res = index.query(vector=[0]*768, filter={"ISBN": {"$eq": clean_query}}, top_k=1, namespace="shell", include_metadata=True)
+        if res.matches: return [res.matches[0]]
 
-        # --- 第二軌：判定搜尋模式與初步過濾 ---
-        vague_keywords = ["推薦", "好書", "小學生", "繪本", "有什麼書", "介紹", "童書", "閱讀"]
-        is_vague = len(user_query.strip()) <= 4 or user_query.strip() in vague_keywords
+    # 創作者直通車 (回傳 None 讓 Layer 4 處理)
+    if query in CACHE["all_creators"]: return None 
         
-        # 這裡我們可以先根據 user_query 解析出是否有「注音」關鍵字
-        needs_pinyin = "注音" in user_query and "不" not in user_query
-        
-        final_candidates = []
-        
-        if is_vague:
-            # 模糊模式：抓取高星等
-            raw_results = vectorstore.similarity_search(user_query, k=20)
-            for d in raw_results:
-                final_candidates.append({
-                    "doc": d,
-                    "rating": float(d.metadata.get('Expert_Rating', 0)),
-                    "has_pinyin": d.metadata.get('注音標籤') == "有注音"
-                })
-            final_candidates.sort(key=lambda x: x['rating'], reverse=True)
-        else:
-            # 明確模式：權重檢索
-            # 先抓多一點 (k=15) 用於後續的注音篩選排序
-            search_results = vectorstore.similarity_search_with_score(user_query, k=15)
-            for doc, score in search_results:
-                final_candidates.append({
-                    "doc": doc,
-                    "rating": float(doc.metadata.get('Expert_Rating', 0)),
-                    "score": score,
-                    "has_pinyin": doc.metadata.get('注音標籤') == "有注音"
-                })
+    # 書名模糊比對
+    if CACHE["all_book_titles"]:
+        match = process.extractOne(query, CACHE["all_book_titles"], scorer=fuzz.token_sort_ratio)
+        if match and match[1] >= 90:
+            res = index.query(vector=[0]*768, filter={"Title": {"$eq": match[0]}}, top_k=1, namespace="shell", include_metadata=True)
+            if res.matches: return [res.matches[0]]
+    return None
+
+def check_is_functional_pattern(query):
+    """Layer 1 輔助：檢查是否為功能性指令 (省 API)"""
+    # 年齡特徵
+    if re.search(r"(\d+歲)|(小[一二三四五六])|(低年級|中年級|高年級)|(國中|幼兒)|(大班|中班|小班)", query): return True
+    # 注音特徵
+    if "注音" in query: return True
+    # 型式特徵
+    if any(k in query for k in ["繪本", "漫畫", "橋樑書", "圖鑑", "小說", "百科"]): return True
+    return False
+
+def layer_1_gatekeeper(query):
+    """Layer 1: 守門員"""
+    # Route A: 課綱
+    if re.search(r"小[一二三四五六]|(?:[一二三四五六]年級)", query) and \
+       re.search(r"國語|數學|社會|自然|生活|物理|化學|歷史", query):
+        return "ROUTE_CURRICULUM"
+    
+    # Route B: 功能性指令 OR 白名單
+    if check_is_functional_pattern(query): return "ROUTE_WHITELIST"
+    for tag in CACHE["whitelist_tags"]:
+        if tag in query: return "ROUTE_WHITELIST"
             
-            # --- 邏輯：注音彈性排序 ---
-            # 如果使用者要求注音，我們將「有注音」且「相關度高」的往前排
-            if needs_pinyin:
-                final_candidates.sort(key=lambda x: (x['has_pinyin'], x['score']), reverse=True)
-            else:
-                final_candidates.sort(key=lambda x: (x['rating'], x['score']), reverse=True)
+    return "ROUTE_UNKNOWN"
 
-        # --- 整合結果 ---
-        # 1. 將書名精確符合的放在最前面
-        final_docs = [doc for doc in exact_match_results]
+def layer_2_google_verification(query):
+    """Layer 2: Google 驗證"""
+    prompt = f"""
+    使用者查詢：「{query}」。請利用 Google Search 判斷。
+    回傳 JSON: {{ "type": "ambiguous"|"external_book"|"concept", "options": [...], "book_info": {{...}} }}
+    若為普通概念或館藏可能有的書，回傳 "type": "concept"。
+    """
+    try:
+        tools = [Tool(google_search=GoogleSearch())]
+        response = client.models.generate_content(
+            model='gemini-2.0-flash', contents=prompt, config=GenerateContentConfig(tools=tools)
+        )
+        return json.loads(response.text.replace("```json", "").replace("```", ""))
+    except: return {"type": "concept"}
+
+def layer_4_vector_search(query, constraints):
+    """Layer 4: 雙軌搜尋 + 規格過濾"""
+    # 1. 產生向量
+    for _ in range(3):
+        try:
+            emb = client.models.embed_content(model="models/text-embedding-004", contents=query)
+            q_vec = emb.embeddings[0].values
+            break
+        except: time.sleep(1)
+    else: return [], "AI 連線忙碌中"
+
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    index = pc.Index("gemini768")
+    
+    # 2. 雙軌搜尋 (Shell + Core)
+    res_shell = index.query(vector=q_vec, top_k=40, namespace="shell", include_metadata=True)
+    res_core = index.query(vector=q_vec, top_k=40, namespace="core", include_metadata=True)
+    
+    # 3. 加權融合
+    candidates = {}
+    for match in res_shell.matches:
+        candidates[match.id] = {"doc": match, "score": match.score * 0.5}
+    for match in res_core.matches:
+        if match.id in candidates: candidates[match.id]["score"] += match.score * 0.5
+        else: candidates[match.id] = {"doc": match, "score": match.score * 0.5}
+
+    all_books = list(candidates.values())
+    
+    # 4. 應用 Layer 3 濾網 (Smart Filter)
+    filtered_books = []
+    for item in all_books:
+        meta = item["doc"].metadata or {}
         
-        # 2. 補足後續結果 (去重)
-        existing_titles = [d.metadata.get('Title') for d in final_docs]
-        for item in final_candidates:
-            if len(final_docs) >= 5: break
-            if item["doc"].metadata.get('Title') not in existing_titles:
-                final_docs.append(item["doc"])
-                existing_titles.append(item["doc"].metadata.get('Title'))
+        # 年齡過濾
+        if constraints["age_range"]:
+            if not check_age_overlap(constraints["age_range"], meta.get("適讀年齡", "")): continue
 
-        return final_docs, is_vague
+        # 注音過濾
+        if constraints["pinyin"] is not None:
+            has_pinyin = (meta.get("注音標籤") == "有注音")
+            if constraints["pinyin"] != has_pinyin: continue
 
-    except Exception as e:
-        st.error(f"檢索系統異常: {e}")
-        return None, False
+        # 分類過濾
+        if constraints["category"]:
+            book_cat = str(meta.get("型式", "")) + str(meta.get("Category", ""))
+            if constraints["category"] not in book_cat: continue
+            
+        filtered_books.append(item)
+    
+    # 5. 例外處理
+    final_list = filtered_books
+    system_msg = ""
+    if not final_list:
+        system_msg = "（找不到完全符合條件的書籍，已為您放寬搜尋條件）"
+        final_list = all_books # Fallback
 
-# ================= 3. UI 介面樣式 (視覺深度優化) =================
+    final_list.sort(key=lambda x: x["score"], reverse=True)
+    return [x["doc"] for x in final_list[:5]], system_msg
+
+# ================= 5. 主控制器 =================
+
+def get_recommendations_vFinal(user_query):
+    # L0
+    direct_hit = layer_0_direct_hit(user_query)
+    if direct_hit: return direct_hit, "為您找到這本書！", "BOOK_LIST"
+        
+    # L1
+    route = layer_1_gatekeeper(user_query)
+    
+    # L3 解析 (無論走哪條路，先解析規格總是好的，除非是 Route C 需要先驗證)
+    constraints = extract_constraints_with_ai(user_query)
+
+    if route == "ROUTE_CURRICULUM":
+        books, msg = layer_4_vector_search(user_query, constraints) 
+        return books, "這是配合學校課程的推薦書單：", "CURRICULUM"
+
+    if route == "ROUTE_WHITELIST":
+        books, msg = layer_4_vector_search(user_query, constraints)
+        return books, msg, "BOOK_LIST"
+        
+    if route == "ROUTE_UNKNOWN":
+        g_res = layer_2_google_verification(user_query)
+        if g_res.get("type") == "ambiguous": return g_res, "發現不同含義", "AMBIGUOUS"
+        elif g_res.get("type") == "external_book": return g_res, "館藏無此書", "EXTERNAL"
+        else:
+            books, msg = layer_4_vector_search(user_query, constraints)
+            return books, msg, "BOOK_LIST"
+
+    return [], "Error", "ERROR"
+
+# ================= 6. UI 介面 =================
 
 st.markdown("""
     <style>
-    /* 隱藏預設元件 */
     #MainMenu, footer, header {visibility: hidden; height: 0;}
-    div[data-testid="stStatusWidget"], .stAppViewFooter, [data-testid="stDecoration"], [data-testid="stHeader"] { display: none !important; }
-    button[title="View fullscreen"] { display: none !important; }
-
-    /* 1. 側邊欄按鈕：橘色圓圈 + 白色反轉箭頭 (>>) */
+    div[data-testid="stStatusWidget"], .stAppViewFooter { display: none !important; }
     [data-testid="stSidebarCollapsedControl"] {
-        background-color: #E67E22 !important;
-        border-radius: 50% !important;
-        width: 40px !important;
-        height: 40px !important;
-        left: 15px !important;
-        top: 15px !important;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+        background-color: #E67E22 !important; border-radius: 50% !important;
+        width: 40px !important; height: 40px !important; display: flex !important; justify-content: center !important;
     }
-    [data-testid="stSidebarCollapsedControl"] svg {
-        fill: white !important;
-        transform: scale(1.2);
-    }
-
-    /* 2. 消除輸入框綠線：打字時保持橘色 */
-    .stTextInput input:focus {
-        border-color: #E67E22 !important;
-        box-shadow: 0 0 0 1px #E67E22 !important;
-        outline: none !important;
-    }
-    
-    /* 3. 專家建議：簡單純文字 */
-    .expert-suggestion-text {
-        margin: 20px 0;
-        line-height: 1.8;
-        color: #34495E;
-        font-size: 1.05rem;
-    }
-
-    /* 4. 移除問卷多餘灰色塊與陰影 */
-    [data-testid="stFeedbackAdmonition"] {
-        background-color: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
-    }
-    .feedback-container {
-        padding: 10px 0;
-        text-align: center;
-        margin-top: 20px;
-    }
-
-    /* 基礎控制 */
+    [data-testid="stSidebarCollapsedControl"] svg { fill: white !important; }
+    .expert-suggestion-text { margin: 20px 0; line-height: 1.8; color: #34495E; font-size: 1.05rem; }
     .stTextInput input { border: 2px solid #E67E22 !important; border-radius: 25px !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# 側邊欄：計次、燈號與問卷連結
 with st.sidebar:
     st.header("📊 ibookle 統計")
-    total_answers = "---"
-    system_status = "🔴 系統連線中..."
-    sheet_data = get_google_sheet()
-    if sheet_data:
-        try:
-            total_answers = len(sheet_data.get_all_values()) - 1
-            system_status = "🟢 系統正常運作"
-        except:
-            system_status = "🟡 系統忙碌中"
-    
-    st.metric("已解答家長疑問", f"{total_answers} 次")
-    st.write(system_status)
+    total = "---"
+    sheet = get_google_sheet()
+    if sheet: total = len(sheet.get_all_values()) - 1
+    st.metric("已解答", f"{total} 次")
     st.divider()
-    
-    # 側邊欄問卷連結區
-    st.subheader("📢 意見回饋")
-    st.write("您的建議是我們進步的動力")
-    st.link_button("📝 填寫使用問卷", "https://childrening.pse.is/8jjrrl", use_container_width=True)
-    
-    st.divider()
-    st.caption("© 2026 ibookle")
+    st.link_button("📝 問卷回饋", "https://childrening.pse.is/8jjrrl", use_container_width=True)
 
-# 主頁面
 st.title("💡 ibookle 童書共讀專家")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
-st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的主題，我會為你挑選最適合的童書。")
 
-user_query = st.text_input("", placeholder="🔍 想找關於天氣的知識書，或是適合小學生的奇幻小說...", key="main_search")
+user_query = st.text_input("", placeholder="🔍 輸入關鍵字：小三 自然、恐龍、十朝...", key="main_search")
 
-# ================= 4. 搜尋與生成邏輯 (稱謂修正與 Prompt 優化) =================
-
-if user_query and (not st.session_state.search_results or st.session_state.get("prev_query") != user_query):
-    with st.spinner("🔍 正在為您翻閱書櫃並整理建議..."):
-        results, is_vague_mode = get_recommendations(user_query)
+if user_query and (not st.session_state.search_results or st.session_state.prev_query != user_query):
+    with st.spinner("🔍 專家正在分析您的需求..."):
+        results, sys_msg, result_type = get_recommendations_vFinal(user_query)
         
-        if results:
-            book_titles = [d.metadata.get('Title','未知') for d in results]
-            titles_str = ", ".join(book_titles)
-            
-            # 根據模式切換 Prompt (溫馨夥伴風格)
-            if is_vague_mode:
-                prompt = f"""
-                你現在是 ibookle 的共讀夥伴，一個溫暖、細心且讀過無數童書的 AI 助理。
-                使用者問了一個模糊的問題："{user_query}"
-                我們挑選了幾本經典好書：{titles_str}
-                
-                請遵循以下規則回覆：
-                1. 開頭請說「您好！」，語氣溫和有禮。
-                2. 說明這些書在許多家長的共讀經驗中評價很高，是很棒的入門選擇。
-                3. 溫柔地詢問更多細節（如：孩子的年級、目前的興趣），好讓你提供更精確的分享。
-                4. 最後一行輸出 [建議標籤：#標籤1 #標籤2 #標籤3]。
-                5. 約 150 字，禁止使用表情符號。
-                """
-            else:
-                prompt = f"""
-                你現在是 ibookle 的共讀夥伴，一個溫暖、細心且讀過無數童書的 AI 助理。
-                使用者需求：{user_query}
-                相關書籍：{titles_str}
-                
-                請遵循以下規則回覆：
-                1. 開頭請說「您好！」，語氣溫和有禮。
-                2. 以分享立場出發，說明這幾本書為什麼常被提到適合目前的狀況。
-                3. 重點放在「可以怎麼互動」，例如跟孩子一起找細節或討論情節。
-                4. 若搜尋結果包含「無注音」但使用者要注音，請解釋：「這幾本雖然沒注音，但節奏感很好，非常適合作為睡前由您讀給孩子聽的床邊故事。」
-                5. 最後一行輸出 [建議標籤：#標籤1 #標籤2 #標籤3]。
-                6. 約 150 字，禁止使用表情符號。
-                """
-            
+        search_data = {"type": result_type, "query": user_query, "sys_msg": sys_msg, "data": results}
+        
+        if result_type in ["BOOK_LIST", "CURRICULUM"] and results:
+            titles = [d.metadata.get('Title','未知') for d in results]
+            titles_str = ", ".join(titles)
+            prompt = f"""
+            你現在是 ibookle 的共讀夥伴。
+            使用者查詢："{user_query}" ({sys_msg})
+            推薦書單：{titles_str}
+            請用溫暖語氣，針對這個主題寫一段約 100 字的導讀建議。
+            若系統訊息有提到「放寬條件」，請溫柔解釋。
+            """
             try:
-                response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-                ai_response = response.text
-                
-                # 存入 Session State (包含 Rating 資訊)
-                st.session_state.search_results = {
-                    "ai_response": ai_response, 
-                    "books": [{
-                        "Title": d.metadata.get('Title', '未知'), 
-                        "Author": d.metadata.get('Author', '未知'), 
-                        "Illustrator": d.metadata.get('Illustrator', '未知'), 
-                        "Category": d.metadata.get('Category', '一般'),
-                        "Quick_Summary": d.metadata.get('Quick_Summary', ''), 
-                        "Refine_Content": d.metadata.get('Refine_Content', '暫無導讀'), 
-                        "Link": d.metadata.get('Link', ''),
-                        "Rating": d.metadata.get('Expert_Rating', 0)
-                    } for d in results]
-                }
-                st.session_state.prev_query = user_query
-                st.session_state.last_row_idx = save_to_log(user_query, ai_response, titles_str)
-            except:
-                st.error("AI 專家目前連線不穩，請稍候。")
-
-# ================= 5. 結果顯示 (加入專家推薦標籤) =================
+                ai_resp = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+                search_data["ai_response"] = ai_resp.text
+            except: search_data["ai_response"] = "專家連線忙碌中。"
+        
+        st.session_state.search_results = search_data
+        st.session_state.prev_query = user_query
+        save_to_log(user_query, str(result_type), str(results)[:100], result_type)
 
 if st.session_state.search_results:
     res = st.session_state.search_results
-    st.markdown(f'<div class="expert-suggestion-text"><b>💡 共讀夥伴分享：</b><br>{res["ai_response"]}</div>', unsafe_allow_html=True)
+    data = res["data"]
     
-    st.markdown("### 📖 為您準備的推薦書單")
-    for b in res["books"]:
-        with st.container():
-            # 修改標題，如果星等為 3.0，加上特別標記
-            header_text = f"《{b['Title']}》"
-            if float(b['Rating']) >= 3.0:
-                header_text += " ✨ [專家推薦]"
-            
-            st.subheader(header_text)
-            st.caption(f"✍️ 作者：{b['Author']} | 🏷️ 分類：{b['Category']} | ⭐ 推薦指數：{b['Rating']}")
-            
-            if b['Quick_Summary']: 
-                st.info(b['Quick_Summary'])
-                
-            with st.expander("💡 看看可以怎麼跟孩子一起讀"):
-                st.markdown(b['Refine_Content'])
-            
-            if b['Link']: 
-                st.link_button(f"🛒 前往購買《{b['Title']}》", b['Link'], use_container_width=True)
+    if res["type"] in ["BOOK_LIST", "CURRICULUM"]:
+        if "ai_response" in res: st.markdown(f'<div class="expert-suggestion-text"><b>💡 共讀夥伴分享：</b><br>{res["ai_response"]}</div>', unsafe_allow_html=True)
+        if res["sys_msg"]: st.caption(f"ℹ️ {res['sys_msg']}")
         
-        st.divider()
+        if not data: st.warning("抱歉，找不到符合條件的書籍。")
+        else:
+            for b in data:
+                meta = b.metadata or {}
+                with st.container():
+                    st.subheader(f"《{meta.get('Title')}》")
+                    st.caption(f"✍️ {meta.get('Author')} | ⭐ {meta.get('Expert_Rating')} | 🏷️ {meta.get('Category')}")
+                    if meta.get('Quick_Summary'): st.info(meta.get('Quick_Summary'))
+                    if meta.get('Link'): st.link_button("🛒 購書連結", meta.get('Link'))
+                st.divider()
+                
+    elif res["type"] == "AMBIGUOUS":
+        st.warning(f"🤔 針對「{res['query']}」，發現不同含義：")
+        opts = data.get("options", [])
+        c1, c2 = st.columns(2)
+        if len(opts) >= 2:
+            with c1: st.info(f"**{opts[0]['label']}**\n\n{opts[0]['desc']}")
+            with c2: st.info(f"**{opts[1]['label']}**\n\n{opts[1]['desc']}")
+                
+    elif res["type"] == "EXTERNAL":
+        info = data.get("book_info", {})
+        st.markdown(f"### 🌐 網路資源：{info.get('title')}")
+        st.write(info.get('summary'))
+        st.markdown("---")
+        st.write("雖然館藏無此書，但您可以參考網路資訊。")
 
-import datetime
-
-# 檢查是否有搜尋結果
-if "search_results" in st.session_state and st.session_state.search_results:
-    res = st.session_state.search_results
-    
-    st.divider() # 視覺分割線
-    
-    # --- 建立分享內容字串 ---
-    # 1. 標題與 AI 的總結建議
-    share_content = f"🌟 ibookle 專家選書報告 🌟\n"
-    share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
-    share_content += f"🔍 您諮詢的需求：{user_query}\n\n"
-    share_content += f"💡 專家分析建議：\n{res['ai_response']}\n\n"
-    share_content += f"📚 精選推薦書單：\n"
-    
-    # 2. 迭代書籍清單
-    for i, book in enumerate(res["books"], 1):
-        share_content += f"{i}. 《{book['Title']}》\n"
-        share_content += f"   ⭐ 專家評分：{book['Rating']} / 3.0\n"
-        share_content += f"   📌 專業導讀：{book['Quick_Summary']}\n"
-        share_content += f"   🔗 連結：{book['Link']}\n\n"
-    
-    share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
-
-    # --- 顯示分享功能區塊 ---
-    st.subheader("📤 儲存與分享本次報告")
-    
-    col_copy, col_dl = st.columns(2)
-    
-    with col_copy:
-        # 使用 st.code 讓使用者容易點擊複製，或用按鈕觸發 toast
-        if st.button("📋 生成分享文字 (Line/FB)"):
-            st.info("下方文字已準備好，您可以直接長按複製並分享！")
-            st.code(share_content, language=None)
-            st.toast("報告已生成，準備好分享囉！", icon="✨")
-
-    with col_dl:
-        # 提供下載功能，讓家長存檔
-        st.download_button(
-            label="📄 下載書單文字檔 (.txt)",
-            data=share_content,
-            file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
-            mime="text/plain",
-            help="將整份專家建議存成純文字檔，方便日後查看"
-        )
-
-    # 預留 Pro 版功能預覽 (增加計畫書說服力)
-    with st.expander("🔒 進階功能預覽（製作中）"):
-        st.write("✨ **加入圖書館借閱清單**")
-        st.write("✨ **加入自訂書單**")
-        st.write("✨ **生成閱讀分析報告**")
-
-
-# ... (後續回饋與 footer 保持不變)
-
-    # 問卷回饋區 (透明背景)
     if st.session_state.last_row_idx:
         fb_key = f"fb_key_{st.session_state.last_row_idx}"
-        st.markdown('<div class="feedback-container">', unsafe_allow_html=True)
-        if fb_key not in st.session_state or st.session_state[fb_key] is None:
-            st.write("🌟 這份建議對您有幫助嗎？")
-        else:
-            st.write("✅ 感謝您的回饋，讓 ibookle 變得更好！")
+        st.write("🌟 滿意這次的搜尋結果嗎？")
         st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
-        st.markdown('</div>', unsafe_allow_html=True)
 else:
-    st.markdown("---")
-    st.caption("👋 歡迎使用 ibookle！請描述孩子目前的狀況，讓專家為您挑選適合的童書。")
-
-st.caption("© 2026 ibookle - 讓每一段共讀時光都更有意義")
+    st.caption("© 2026 ibookle")
