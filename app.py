@@ -9,7 +9,6 @@ from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from pinecone import Pinecone
 from rapidfuzz import process, fuzz
 
-
 # ================= 1. 初始化與環境配置 =================
 load_dotenv()
 
@@ -43,7 +42,6 @@ def get_cache():
             
             # 1. 基礎與進階挖掘 (Jieba)
             tags = set()
-            # 合併所有可能的文字欄位
             content_text = ""
             if "Merged_Keywords" in df.columns:
                  content_text += " ".join(df["Merged_Keywords"].dropna().astype(str).tolist()) + " "
@@ -52,7 +50,6 @@ def get_cache():
             if "Vector_Edu_Function" in df.columns:
                 content_text += " ".join(df["Vector_Edu_Function"].dropna().astype(str).tolist())
             
-            # 定義停用詞
             stop_words = {
                 "跟著", "就此", "而是", "只是", "還有", "讓人", "不僅", "作為", 
                 "透過", "雖然", "但是", "因為", "所以", "如果", "其實", "然後",
@@ -65,12 +62,9 @@ def get_cache():
                     if len(w) > 1 and w.strip() and w not in stop_words: 
                         tags.add(w)
 
-            # 加入人工補強通用詞
             tags.update(["恐龍", "友誼", "上學", "科學", "宇宙", "昆蟲", "繪本", "橋樑書", "漫畫", "好書", "推薦", "注音", "大班", "中班", "小班"])
             cache["whitelist_tags"] = tags
-            print(f"✅ 白名單建立完成，共 {len(tags)} 個詞")
 
-            # 2. 建立書名與創作者清單
             if "Title" in df.columns:
                 cache["all_book_titles"] = df["Title"].dropna().astype(str).tolist()
             
@@ -118,7 +112,7 @@ def update_log_feedback():
             try:
                 sheet = get_google_sheet()
                 sheet.update_cell(row_idx, 6, "👍" if score == 1 else "👎")
-                st.toast("感謝您的鼓勵！" if score == 1 else "感謝回饋！", icon="❤️" if score == 1 else "📝")
+                st.toast("感謝回饋！", icon="❤️")
             except: pass
 
 # ================= 4. 核心搜尋邏輯 (Layer 0 - 4) =================
@@ -135,7 +129,6 @@ def check_age_overlap(user_range, book_age_str):
     except: return True
 
 def extract_constraints_with_ai(query):
-    """Layer 3: 使用 Gemini 進行精準語意解析"""
     prompt = f"""
     你是 ibookle 的圖書館管理員。請分析：「{query}」
     回傳純 JSON：
@@ -154,20 +147,16 @@ def extract_constraints_with_ai(query):
     except: return {"age_range": None, "pinyin": None, "category": None}
 
 def layer_0_direct_hit(query):
-    """Layer 0: 直通車"""
     pc = Pinecone(api_key=PINECONE_API_KEY)
     index = pc.Index("gemini768")
     
-    # ISBN
     clean_query = query.replace("-", "").strip()
     if clean_query.isdigit() and len(clean_query) in [10, 13]:
         res = index.query(vector=[0]*768, filter={"ISBN": {"$eq": clean_query}}, top_k=1, namespace="shell", include_metadata=True)
         if res.matches: return [res.matches[0]]
 
-    # 創作者直通車 (回傳 None 讓 Layer 4 處理)
     if query in CACHE["all_creators"]: return None 
         
-    # 書名模糊比對
     if CACHE["all_book_titles"]:
         match = process.extractOne(query, CACHE["all_book_titles"], scorer=fuzz.token_sort_ratio)
         if match and match[1] >= 90:
@@ -176,23 +165,16 @@ def layer_0_direct_hit(query):
     return None
 
 def check_is_functional_pattern(query):
-    """Layer 1 輔助：檢查是否為功能性指令 (省 API)"""
-    # 年齡特徵
     if re.search(r"(\d+歲)|(小[一二三四五六])|(低年級|中年級|高年級)|(國中|幼兒)|(大班|中班|小班)", query): return True
-    # 注音特徵
     if "注音" in query: return True
-    # 型式特徵
     if any(k in query for k in ["繪本", "漫畫", "橋樑書", "圖鑑", "小說", "百科"]): return True
     return False
 
 def layer_1_gatekeeper(query):
-    """Layer 1: 守門員"""
-    # Route A: 課綱
     if re.search(r"小[一二三四五六]|(?:[一二三四五六]年級)", query) and \
        re.search(r"國語|數學|社會|自然|生活|物理|化學|歷史", query):
         return "ROUTE_CURRICULUM"
     
-    # Route B: 功能性指令 OR 白名單
     if check_is_functional_pattern(query): return "ROUTE_WHITELIST"
     for tag in CACHE["whitelist_tags"]:
         if tag in query: return "ROUTE_WHITELIST"
@@ -200,7 +182,6 @@ def layer_1_gatekeeper(query):
     return "ROUTE_UNKNOWN"
 
 def layer_2_google_verification(query):
-    """Layer 2: Google 驗證"""
     prompt = f"""
     使用者查詢：「{query}」。請利用 Google Search 判斷。
     回傳 JSON: {{ "type": "ambiguous"|"external_book"|"concept", "options": [...], "book_info": {{...}} }}
@@ -211,59 +192,52 @@ def layer_2_google_verification(query):
         response = client.models.generate_content(
             model='gemini-2.0-flash', contents=prompt, config=GenerateContentConfig(tools=tools)
         )
-        return json.loads(response.text.replace("```json", "").replace("```", ""))
+        text = response.text.replace("```json", "").replace("```", "")
+        return json.loads(text)
     except: return {"type": "concept"}
-
-# ==========================================
-# 請將這一段完全覆蓋原本的 layer_4_vector_search
-# ==========================================
 
 def layer_4_vector_search(query, constraints):
     """
-    Layer 4: 雙軌搜尋 (完全配合上傳程式的 google.genai 原生寫法)
+    Layer 4: 雙軌搜尋 (已修正模型名稱，完全對齊上傳端)
     """
-    # 1. 產生向量 (使用跟上傳程式一模一樣的邏輯)
     q_vec = []
     try:
-        # ⚠️ 關鍵修正：這裡不加 task_type，完全模擬您上傳時的行為
+        # ⚠️ 修正：移除 models/ 前綴，確保與上傳程式 100% 一致
         response = client.models.embed_content(
-            model="models/text-embedding-004",
+            model="text-embedding-004",  
             contents=query
         )
         q_vec = response.embeddings[0].values
         
-        # 安全檢查：確認維度是 768
+        # 安全網：如果維度跑掉，嘗試切片
         if len(q_vec) != 768:
-            print(f"⚠️ 警告：向量維度異常 ({len(q_vec)})")
-            # 如果維度跑掉 (例如變 1536)，嘗試切片 (這是最後的保險)
+            print(f"⚠️ 向量維度異常: {len(q_vec)}")
             q_vec = q_vec[:768]
             
     except Exception as e:
-        print(f"Embedding Error: {e}")
-        return [], f"AI 連線錯誤: {e}"
+        return [], f"向量生成失敗: {e}"
 
-    # 2. 連線 Pinecone
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("gemini768")
         
-        # 3. 執行雙軌搜尋
-        # 這裡我們把 top_k 拉高到 50，確保過濾後還有剩
+        # ⚠️ 診斷模式：如果開啟，顯示 Raw Score
+        show_debug = st.session_state.get("show_debug", False)
+
         res_shell = index.query(vector=q_vec, top_k=50, namespace="shell", include_metadata=True)
         res_core = index.query(vector=q_vec, top_k=50, namespace="core", include_metadata=True)
         
     except Exception as e:
-        return [], f"資料庫讀取錯誤: {e}"
+        return [], f"Pinecone 連線失敗: {e}"
 
-    # 4. 加權融合 (Hybrid Fusion)
     candidates = {}
     
-    # 融合 Shell (趣味性)
+    # 融合 Shell (Shell 結果優先)
     if res_shell.matches:
         for match in res_shell.matches:
             candidates[match.id] = {"doc": match, "score": match.score * 0.5}
-            
-    # 融合 Core (教育性)
+
+    # 融合 Core
     if res_core.matches:
         for match in res_core.matches:
             if match.id in candidates: 
@@ -273,61 +247,57 @@ def layer_4_vector_search(query, constraints):
 
     all_books = list(candidates.values())
     
-    # Debug: 如果連這裡都沒書，代表向量真的完全沒對上
-    if not all_books:
-        print(f"DEBUG: 搜尋 '{query}' 回傳 0 筆。向量長度: {len(q_vec)}")
-        return [], "找不到相關書籍 (向量未命中)"
-
-    # 5. 應用 Layer 3 濾網 (Smart Filter)
+    # --- Debug 資訊 ---
+    if st.session_state.get("show_debug", False):
+        st.sidebar.markdown("### 🛠️ 向量診斷")
+        st.sidebar.write(f"Shell 命中: {len(res_shell.matches)}")
+        st.sidebar.write(f"Core 命中: {len(res_core.matches)}")
+        if all_books:
+             # 顯示最高分的 3 本書分數
+            top_3 = sorted(all_books, key=lambda x: x["score"], reverse=True)[:3]
+            st.sidebar.write("🏆 Top 3 Raw Scores:")
+            for b in top_3:
+                st.sidebar.write(f"- {b['doc'].metadata.get('Title')}: **{b['score']:.4f}**")
+    # ------------------
+    
+    # 應用 Layer 3 濾網
     filtered_books = []
     for item in all_books:
         meta = item["doc"].metadata or {}
         
-        # (A) 年齡過濾
         if constraints["age_range"]:
             if not check_age_overlap(constraints["age_range"], meta.get("適讀年齡", "")): continue
 
-        # (B) 注音過濾
         if constraints["pinyin"] is not None:
             has_pinyin = (meta.get("注音標籤") == "有注音")
             if constraints["pinyin"] != has_pinyin: continue
 
-        # (C) 分類過濾
         if constraints["category"]:
             book_cat = str(meta.get("型式", "")) + str(meta.get("Category", ""))
             if constraints["category"] not in book_cat: continue
             
         filtered_books.append(item)
     
-    # 6. 例外處理 (Fallback)
-    # 如果篩選太嚴格導致沒書，就退回到「原本最相關的書」(all_books)
+    # Fallback
     final_list = filtered_books
     system_msg = ""
-    
     if not final_list:
         if all_books:
-            system_msg = "（找不到符合所有條件的書，已為您顯示內容最相關的推薦）"
+            system_msg = "（找不到符合條件的書，顯示最相關推薦）"
             final_list = all_books 
         else:
             return [], "抱歉，真的找不到書。"
 
-    # 依分數排序
     final_list.sort(key=lambda x: x["score"], reverse=True)
-    
-    # 回傳前 5 名
     return [x["doc"] for x in final_list[:5]], system_msg
 
 # ================= 5. 主控制器 =================
 
 def get_recommendations_vFinal(user_query):
-    # L0
     direct_hit = layer_0_direct_hit(user_query)
     if direct_hit: return direct_hit, "為您找到這本書！", "BOOK_LIST"
         
-    # L1
     route = layer_1_gatekeeper(user_query)
-    
-    # L3 解析 (無論走哪條路，先解析規格總是好的，除非是 Route C 需要先驗證)
     constraints = extract_constraints_with_ai(user_query)
 
     if route == "ROUTE_CURRICULUM":
@@ -366,6 +336,9 @@ st.markdown("""
 
 with st.sidebar:
     st.header("📊 ibookle 統計")
+    # ✨ 診斷開關：請打開這個來檢查分數！
+    st.session_state.show_debug = st.checkbox("🛠️ 開發者診斷模式", value=False)
+    
     total = "---"
     sheet = get_google_sheet()
     if sheet: total = len(sheet.get_all_values()) - 1
@@ -392,7 +365,6 @@ if user_query and (not st.session_state.search_results or st.session_state.prev_
             使用者查詢："{user_query}" ({sys_msg})
             推薦書單：{titles_str}
             請用溫暖語氣，針對這個主題寫一段約 100 字的導讀建議。
-            若系統訊息有提到「放寬條件」，請溫柔解釋。
             """
             try:
                 ai_resp = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
