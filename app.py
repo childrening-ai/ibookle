@@ -206,7 +206,10 @@ def layer_4_vector_search(query, constraints):
         # 1. 產生向量 (完全配合上傳程式，不加額外參數)
         response = client.models.embed_content(
             model="text-embedding-004",
-            contents=query
+            contents=user_query,
+            config={
+                'task_type': 'RETRIEVAL_QUERY' # 👈 關鍵：告訴模型這是使用者的「問題」
+            }
         )
         q_vec = response.embeddings[0].values
         
