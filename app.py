@@ -205,48 +205,58 @@ def layer_2_google_verification(query):
     except: return {"type": "concept"}
 
 def layer_4_vector_search(query, constraints):
-    """Layer 4: 雙軌搜尋 (嚴格型別版 - 確保 Task Type 生效)"""
+    """
+    Layer 4: 雙軌搜尋 (概念對接版)
+    修正邏輯：將搜尋模式改為 RETRIEVAL_DOCUMENT，解決短關鍵字(如:天氣)搜尋失準的問題。
+    """
     q_vec = []
     try:
-        # ✨ 修正 1：引入 types 以確保 config 生效
-        from google.genai import types 
+        from google.genai import types # 確保引用正確
         
-        # ✨ 修正 2：使用 types.EmbedContentConfig
-        # 這是最關鍵的一步！確保搜尋向量是「鑰匙 (QUERY)」形狀
+        # ⚠️ 關鍵修正：將 task_type 改為 'RETRIEVAL_DOCUMENT'
+        # 這樣做可以讓 "天氣" (關鍵字) 的向量，跟資料庫裡 "天氣" (書本內容) 的向量完美重疊。
         response = client.models.embed_content(
             model="text-embedding-004",
             contents=query,
             config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY" 
+                task_type="RETRIEVAL_DOCUMENT" 
             )
         )
         q_vec = response.embeddings[0].values
         
-        # 確保維度正確
+        # 維度防呆
         if len(q_vec) != 768: 
             q_vec = q_vec[:768]
             
     except Exception as e:
-        return [], f"向量生成失敗: {e}"
+        # 如果新版寫法報錯，嘗試回退到通用寫法 (不指定 config)
+        try:
+            response = client.models.embed_content(
+                model="text-embedding-004",
+                contents=query
+            )
+            q_vec = response.embeddings[0].values
+        except:
+            return [], f"向量生成失敗: {e}"
 
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("gemini768")
-        # 搜尋 Shell 與 Core
+        
+        # 執行搜尋
         res_shell = index.query(vector=q_vec, top_k=50, namespace="shell", include_metadata=True)
         res_core = index.query(vector=q_vec, top_k=50, namespace="core", include_metadata=True)
+        
     except Exception as e:
         return [], f"Pinecone 連線失敗: {e}"
 
-    # Max Strategy 融合
+    # Max Strategy (擇優錄取)
     candidates = {}
     
-    # 處理 Shell
     if res_shell.matches:
         for match in res_shell.matches:
             candidates[match.id] = {"doc": match, "score": match.score}
 
-    # 處理 Core
     if res_core.matches:
         for match in res_core.matches:
             if match.id in candidates: 
@@ -256,16 +266,15 @@ def layer_4_vector_search(query, constraints):
 
     all_books = list(candidates.values())
     
-    # --- 診斷顯示 (方便您確認) ---
+    # 診斷顯示
     if st.session_state.get("show_debug", False):
-        st.sidebar.markdown("### 🛠️ 向量診斷 (Strict)")
+        st.sidebar.markdown("### 🛠️ 向量診斷 (Doc-Mode)")
         if all_books:
             top_3 = sorted(all_books, key=lambda x: x["score"], reverse=True)[:3]
             for b in top_3:
                 st.sidebar.write(f"- {b['doc'].metadata.get('Title')}: **{b['score']:.4f}**")
-    # ------------------
 
-    # Layer 3 規格過濾
+    # 過濾邏輯
     filtered_books = []
     for item in all_books:
         meta = item["doc"].metadata or {}
@@ -284,10 +293,10 @@ def layer_4_vector_search(query, constraints):
     system_msg = ""
     if not final_list:
         if all_books:
-            system_msg = "（找不到符合所有條件的書，為您推薦內容最相關的書籍）"
+            system_msg = "（找不到符合條件的書，推薦最相關的書籍）"
             final_list = all_books 
         else:
-            return [], "抱歉，真的找不到書。"
+            return [], "抱歉，找不到相關書籍。"
 
     final_list.sort(key=lambda x: x["score"], reverse=True)
     return [x["doc"] for x in final_list[:5]], system_msg
