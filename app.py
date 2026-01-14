@@ -98,7 +98,7 @@ def get_recommendations(user_query):
             def embed_documents(self, texts): return [v[:768] for v in self.model.embed_documents(texts)]
         
         fixed_embeddings = DimensionFixer(embeddings_model)
-        vectorstore = PineconeVectorStore(index_name="gemini768", embedding=fixed_embeddings, pinecone_api_key=pinecone_key)
+        vectorstore = PineconeVectorStore(index_name="gemini768-ori", embedding=fixed_embeddings, pinecone_api_key=pinecone_key)
 
         # --- 判定模糊提問 ---
         vague_keywords = ["推薦", "好書", "小學生", "繪本", "有什麼書", "介紹", "童書", "閱讀"]
