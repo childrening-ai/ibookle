@@ -2,173 +2,113 @@ import streamlit as st
 import os
 import json
 import requests
+import numpy as np
 from pinecone import Pinecone
 from dotenv import load_dotenv
 
-# ================= 1. 初始化與設定 =================
+# ================= 設定區 =================
 load_dotenv()
-st.set_page_config(page_title="Layer 4 核心驗證 (001)", layout="centered")
+st.set_page_config(page_title="001 核心診斷 (Core Only)", layout="centered")
 
-# 讀取 API Key (優先從 Secrets 讀取，方便雲端部署，若無則讀本地 .env)
 GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY") or os.getenv("GOOGLE_API_KEY")
 PINECONE_API_KEY = st.secrets.get("PINECONE_API_KEY") or os.getenv("PINECONE_API_KEY")
-
-# [設定] 請確保這裡的 Index 名稱與您剛剛上傳程式設定的一樣
 INDEX_NAME = "ibookle-dual-001" 
 
 if not GOOGLE_API_KEY or not PINECONE_API_KEY:
-    st.error("❌ API Key 未設定，請檢查 .env 或 Secrets")
+    st.error("❌ API Key 未設定")
     st.stop()
 
-# ================= 2. 核心函式：生成向量 (REST API + 001) =================
+# ================= 核心函式 (001 REST) =================
 def get_embedding_001(text):
     """
-    使用 REST API 呼叫 embedding-001 模型。
-    不使用 SDK，確保與上傳端的邏輯 100% 一致。
+    取得 001 向量 (REST API)
     """
+    if not text: return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    
-    # 001 模型的標準 Payload (不需要 task_type, 不需要 config)
     payload = {
         "model": "models/embedding-001",
-        "content": {"parts": [{"text": text}]}
+        "content": {"parts": [{"text": str(text)}]}
     }
-    
     try:
         response = requests.post(url, headers=headers, data=json.dumps(payload))
         if response.status_code == 200:
             return response.json()['embedding']['values']
         else:
-            st.error(f"Embedding API Error: {response.text}")
+            st.error(f"API Error: {response.text}")
             return None
     except Exception as e:
         st.error(f"連線錯誤: {e}")
         return None
 
-# ================= 3. 核心函式：雙軌搜尋 (Core + Shell) =================
-def search_dual_track(query):
-    """
-    執行純粹的 Layer 4 雙軌搜尋
-    1. 產生查詢向量
-    2. 同時搜 Shell (外殼) 與 Core (核心)
-    3. 合併結果 (Max Strategy)
-    """
-    # A. 產生向量
-    vector = get_embedding_001(query)
-    if not vector:
-        return []
+# ================= 主程式 =================
+st.title("🩺 001 核心診斷室")
+st.write("目標：檢查模型是否正常，並單純搜尋 Core (教育功能) 軌道。")
 
-    try:
-        # B. 連線 Pinecone
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index(INDEX_NAME)
-
-        # C. 雙軌搜尋 (分別搜兩個 Namespace)
-        # 搜 Shell (故事/簡介)
-        res_shell = index.query(
-            vector=vector, 
-            top_k=20, 
-            namespace="shell", 
-            include_metadata=True
-        )
+# -------------------------------------------
+# 步驟 1: 模型自我檢測 (關鍵！)
+# -------------------------------------------
+st.subheader("1. 模型自我檢測 (Self-Check)")
+if st.button("檢測 001 模型是否活著？"):
+    with st.spinner("正在生成測試向量..."):
+        vec_a = get_embedding_001("天氣")
+        vec_b = get_embedding_001("恐龍")
         
-        # 搜 Core (教育/導讀)
-        res_core = index.query(
-            vector=vector, 
-            top_k=20, 
-            namespace="core", 
-            include_metadata=True
-        )
-
-        # D. 合併邏輯 (Max Strategy)
-        # 如果一本書在兩個軌道都被搜到，取分數高的那個
-        candidates = {}
-
-        # 處理 Shell 結果
-        if res_shell.matches:
-            for match in res_shell.matches:
-                candidates[match.id] = {
-                    "meta": match.metadata,
-                    "score": match.score,
-                    "source": "shell (外殼)" # 標記來源方便除錯
-                }
-
-        # 處理 Core 結果
-        if res_core.matches:
-            for match in res_core.matches:
-                if match.id in candidates:
-                    # 如果已經存在，比較分數
-                    if match.score > candidates[match.id]["score"]:
-                        candidates[match.id]["score"] = match.score
-                        candidates[match.id]["source"] = "core (核心)" # 更新來源
-                        # 這裡也可以選擇混合分數，但 Max 策略最簡單有效
-                else:
-                    # 如果不存在，直接加入
-                    candidates[match.id] = {
-                        "meta": match.metadata,
-                        "score": match.score,
-                        "source": "core (核心)"
-                    }
-
-        # E. 排序並回傳
-        # 轉成 List 並依分數高低排序
-        final_results = list(candidates.values())
-        final_results.sort(key=lambda x: x["score"], reverse=True)
-
-        return final_results[:10] # 只看前 10 名
-
-    except Exception as e:
-        st.error(f"Pinecone Error: {e}")
-        return []
-
-# ================= 4. UI 介面 (除錯用) =================
-st.title("🧪 Layer 4 核心驗證 (001版)")
-st.caption("僅測試：向量生成 -> 雙軌搜尋 -> 結果合併")
-
-# 顯示目前的設定，方便確認
-with st.expander("查看環境設定"):
-    st.write(f"- **Model**: models/embedding-001")
-    st.write(f"- **Index**: {INDEX_NAME}")
-    st.write(f"- **API Key Status**: {'✅ OK' if GOOGLE_API_KEY else '❌ Missing'}")
-
-query = st.text_input("輸入關鍵字測試 (例如: 恐龍, 分離焦慮, 或是書名)", value="天氣")
-
-if st.button("🚀 執行搜尋"):
-    if not query:
-        st.warning("請輸入關鍵字")
-    else:
-        with st.spinner("正在生成向量並搜尋雙軌資料庫..."):
-            results = search_dual_track(query)
-
-        if results:
-            st.success(f"找到 {len(results)} 筆相關資料")
+        if vec_a and vec_b:
+            # 計算相似度
+            dot_product = np.dot(vec_a, vec_b)
             
-            for i, item in enumerate(results):
-                score = item['score']
-                meta = item['meta'] or {}
-                source = item['source']
-                
-                # 視覺化分數條
-                st.markdown(f"### {i+1}. 《{meta.get('Title', '無標題')}》")
-                st.progress(min(score, 1.0)) 
-                st.caption(f"🔍 相關度: **{score:.4f}** | 來源軌道: `{source}` | 評分: {meta.get('Expert_Rating', 0)}")
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.info(f"**摘要 (Quick_Summary):**\n\n{meta.get('Quick_Summary', '')[:100]}...")
-                with c2:
-                    st.warning(f"**導讀 (Refine_Content):**\n\n{meta.get('Refine_Content', '')[:100]}...")
-                
-                with st.expander("查看完整 Metadata (除錯用)"):
-                    st.json(meta)
-                
-                st.divider()
+            st.write(f"🔹 「天氣」向量前5碼: `{vec_a[:5]}...`")
+            st.write(f"🔹 「恐龍」向量前5碼: `{vec_b[:5]}...`")
+            st.metric("兩者相似度 (應低於 0.8)", f"{dot_product:.4f}")
+            
+            if dot_product > 0.99:
+                st.error("🚨 **嚴重警告**：模型失效！天氣和恐龍的向量完全一樣。這代表 API 回傳了預設值或錯誤。")
+                st.stop()
+            else:
+                st.success("✅ 模型正常！能夠區分不同語意。")
         else:
-            st.error("找不到任何結果。")
-            st.markdown("""
-            **可能原因排除：**
-            1. 資料庫是空的 (請確認 `upload` 程式是否跑完)。
-            2. Index 名稱不對 (請檢查 `INDEX_NAME`)。
-            3. API Key 錯誤。
-            """)
+            st.error("❌ 無法生成向量，請檢查 API Key。")
+
+st.divider()
+
+# -------------------------------------------
+# 步驟 2: 單軌搜尋 (Core Only)
+# -------------------------------------------
+st.subheader("2. 單軌搜尋 (Edu/Core Only)")
+query = st.text_input("輸入關鍵字 (例如: 建立自信, 分離焦慮)", value="建立自信")
+
+if st.button("搜尋 Core 軌道"):
+    # A. 產生向量
+    query_vec = get_embedding_001(query)
+    
+    if query_vec:
+        # B. 搜尋 Pinecone
+        try:
+            pc = Pinecone(api_key=PINECONE_API_KEY)
+            index = pc.Index(INDEX_NAME)
+            
+            # 只搜 core namespace
+            res = index.query(
+                vector=query_vec, 
+                top_k=5, 
+                namespace="core", # 鎖定教育功能軌道
+                include_metadata=True
+            )
+            
+            if res.matches:
+                st.success(f"找到 {len(res.matches)} 筆結果")
+                for match in res.matches:
+                    meta = match.metadata
+                    score = match.score
+                    
+                    with st.container():
+                        st.markdown(f"**《{meta.get('Title')}》** (相似度: `{score:.4f}`)")
+                        # 顯示導讀內容 (這是我們 Core 軌道的核心)
+                        st.info(meta.get('Refine_Content', '')[:150] + "...")
+                        st.divider()
+            else:
+                st.warning("找不到結果 (Core 軌道無資料或無匹配)。")
+                
+        except Exception as e:
+            st.error(f"Pinecone Error: {e}")
