@@ -1,8 +1,8 @@
-streamlit==1.41.1
+streamlit
 jieba
 pandas
 plotly
-google-genai==0.3.0
+google-genai
 gspread
 oauth2client
 python-dotenv
