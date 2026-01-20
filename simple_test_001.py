@@ -38,25 +38,61 @@ def get_search_engines():
     )
     return store_shell, store_core
 
-# ================= 修正後的 Layer 0: 書名邏輯增強 =================
+# ================= 3. Layer 0: 快取與直通車邏輯 =================
+@st.cache_resource
+def get_cache():
+    """
+    建立書名與 ISBN 的快取清單
+    """
+    cache = {"titles": [], "isbn_map": {}}
+    try:
+        if os.path.exists(CSV_PATH):
+            df = pd.read_csv(CSV_PATH)
+            
+            # A. 建立書名列表 (用於模糊比對)
+            if "Title" in df.columns:
+                cache["titles"] = df["Title"].dropna().astype(str).tolist()
+            
+            # B. 建立 ISBN 對照表 (用於精準搜尋)
+            if "ISBN" in df.columns and "Title" in df.columns:
+                temp_df = df[["ISBN", "Title"]].dropna()
+                for _, row in temp_df.iterrows():
+                    # 清洗 ISBN
+                    raw_isbn = str(row["ISBN"])
+                    clean_isbn = raw_isbn.replace(".0", "").replace("-", "").replace(" ", "").strip()
+                    book_title = str(row["Title"]).strip()
+                    
+                    if clean_isbn:
+                        cache["isbn_map"][clean_isbn] = book_title
+        else:
+            st.warning(f"⚠️ 找不到 {CSV_PATH}，直通車功能受限。")
+    except Exception as e:
+        st.error(f"Cache Error: {e}")
+    return cache
+
+# 👇👇👇 [關鍵修正] 這行絕對不能少！也不能放在函式裡面！ 👇👇👇
+CACHE = get_cache() 
+# 👆👆👆 這一行負責把上面算好的結果存入全域變數 CACHE 👆👆👆
+
 
 def layer_0_direct_hit(query):
     """
-    Layer 0: 直通車
-    修正重點：改用 partial_token_sort_ratio 支援部分關鍵字搜尋
+    Layer 0: 直通車 (修正版：支援部分關鍵字)
     """
+    # 0. 防呆機制：如果 CACHE 沒載入成功，直接回傳 None
+    if not CACHE or "titles" not in CACHE:
+        return None
+
     # 清洗輸入
     clean_q = query.replace("-", "").replace(" ", "").strip()
     
-    # 1. ISBN 精準比對 (維持不變)
-    if clean_q.isdigit() and clean_q in CACHE["isbn_map"]:
+    # 1. ISBN 精準比對
+    if clean_q.isdigit() and "isbn_map" in CACHE and clean_q in CACHE["isbn_map"]:
         matched_title = CACHE["isbn_map"][clean_q]
         return matched_title, 1.0
 
-    # 2. 書名模糊比對 (演算法升級)
+    # 2. 書名模糊比對 (演算法：部分符合 partial_token_sort_ratio)
     if CACHE["titles"]:
-        # [修改點] 使用 partial_token_sort_ratio
-        # 這會忽略長度差異，只要 query 是 title 的一部分，分數就會很高
         match = process.extractOne(
             query, 
             CACHE["titles"], 
@@ -66,12 +102,11 @@ def layer_0_direct_hit(query):
         if match:
             matched_title, score, index = match
             
-            # [除錯用] 顯示在側邊欄，讓您知道現在算幾分 (正式上線可拿掉)
-            st.sidebar.markdown(f"🔍 直通車偵錯: `{query}` vs `{matched_title}` = **{score}分**")
+            # [除錯] 顯示分數 (正式版可註解掉)
+            st.sidebar.markdown(f"🔍 直通車: `{query}` vs `{matched_title}` = **{score}**")
 
-            # 門檻建議設為 70~80，因為 partial 比較容易過關，太低會誤判
-            if score >= 75: 
-                # 回傳書名與轉換後的分數 (0.75)
+            # 門檻建議 75~85
+            if score >= 80: 
                 return matched_title, score / 100.0
                 
     return None
