@@ -379,6 +379,12 @@ if st.button("🔍 搜尋"):
                 pinyin_label = meta.get('注音標籤', '')
                 link = meta.get('書店連結', '')
                 
+    # [關鍵修正] 這裡定義 rating，下面才不會報錯
+                try: 
+                    rating = float(meta.get('Expert_Rating', 0))
+                except: 
+                    rating = 0.0
+
                 # 圖片
                 img_raw = str(meta.get('書封', ''))
                 img_url = None
