@@ -437,7 +437,7 @@ if st.button("🔍 搜尋"):
 
                         summary = meta.get('Quick_Summary', '')
                         if str(summary)=='nan': summary="暫無"
-                        st.markdown(f"**📖 摘要**：{summary}...")
+                        st.markdown(f"**📖 摘要**：{summary}")
                         if link and str(link).startswith('http'):
                             st.link_button("🛒 博客來購書", link)
                         
