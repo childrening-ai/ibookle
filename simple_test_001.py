@@ -187,11 +187,8 @@ def layer_3_analyze_intent(user_query, llm_model):
         # 如果 AI 失敗，回傳原始查詢且不篩選
         return {"search_keywords": user_query, "filters": {}}
 
-# ================= [修改] Layer 4: 支援動態放寬的雙軌搜尋 =================
+# ================= [修正] Layer 4: 雙軌搜尋 (修復無謂的放寬提示) =================
 def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=None):
-    """
-    智慧搜尋：如果嚴格篩選找不到好書，會自動放寬「型式」與「注音」，但堅持「年齡」。
-    """
     # --- 模式 A: 直通車 (維持不變) ---
     if exact_title_filter:
         results = db_shell.similarity_search_with_score(
@@ -199,21 +196,19 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
         )
         return [{"doc": doc, "score": 1.0, "matched_via": ["🚀 直通車"], "is_direct_hit": True} for doc, score in results]
 
-    # --- 內部函式：執行一次搜尋 ---
+    # --- [關鍵修正 1] 預先清洗 Filter，只保留有效值 ---
+    # 把 value 為 None 的鍵值對直接刪掉，這樣 active_filters 才是乾淨的
+    active_filters = {k: v for k, v in metadata_filter.items() if v} if metadata_filter else {}
+
+    # --- 內部函式：執行搜尋 ---
     def run_search(current_filter):
-        # 清除 None 值
-        clean_filter = {k: v for k, v in current_filter.items() if v} if current_filter else None
-        
+        # 因為外面已經清洗過了，這裡可以直接用
         candidates = {}
         try:
-            # Shell 與 Core 雙軌搜尋
-            r_shell = db_shell.similarity_search_with_score(query, k=top_k, filter=clean_filter)
-            r_core = db_core.similarity_search_with_score(query, k=top_k, filter=clean_filter)
-        except Exception as e:
-            # 萬一 Pinecone 報錯，回傳空
-            return []
+            r_shell = db_shell.similarity_search_with_score(query, k=top_k, filter=current_filter)
+            r_core = db_core.similarity_search_with_score(query, k=top_k, filter=current_filter)
+        except: return []
 
-        # 合併分數
         for doc, score in r_shell:
             bid = doc.metadata.get('ISBN') or doc.metadata.get('Title')
             if not bid: continue
@@ -228,60 +223,59 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
             else:
                 candidates[bid] = {"doc": doc, "score": score, "matched_via": ["核"], "is_direct_hit": False}
         
-        # 轉成 List 並排序
         final = list(candidates.values())
         final.sort(key=lambda x: x["score"], reverse=True)
         return final
 
     # ==========================
-    # 🚀 [核心邏輯修正] 兩階段搜尋
+    # 🚀 兩階段搜尋邏輯
     # ==========================
     
-    # 1. 第一輪：嚴格搜尋 (Strict Search)
-    # 使用所有 AI 建議的條件 (年齡 + 型式 + 注音)
-    results_strict = run_search(metadata_filter)
+    # 1. 第一輪：嚴格搜尋 (使用 active_filters)
+    results_strict = run_search(active_filters)
     
     # 2. 判斷是否需要放寬
-    # 條件：如果「嚴格搜尋」出來的高分書 (Score > 0.72) 少於 3 本，代表太嚴格了
     high_quality_count = sum(1 for item in results_strict if item['score'] > 0.72)
-    
-    final_results = results_strict # 預設使用嚴格結果
+    final_results = results_strict
 
-    if high_quality_count < 3 and metadata_filter:
-        # 3. 準備放寬條件：只保留「適讀年齡」，捨棄「型式」與「注音」
-        relaxed_filter = {}
-        if "適讀年齡" in metadata_filter:
-            relaxed_filter["適讀年齡"] = metadata_filter["適讀年齡"]
+    # --- [關鍵修正 2] 精準的觸發條件 ---
+    # 只有當同時滿足以下兩個條件才放寬：
+    # (A) 高分結果太少 (< 3)
+    # (B) 目前的篩選條件裡，真的包含「型式」或「注音」(這才是我們要捨棄的對象)
+    # 如果使用者只指定了「年齡」或根本沒指定，就不應該放寬。
+    
+    droppable_keys = ["型式", "注音", "注音標籤"]
+    has_droppable_filters = any(key in active_filters for key in droppable_keys)
+
+    if high_quality_count < 3 and has_droppable_filters:
         
-        # 只有當 filter 真的有變少時，才需要重搜 (避免無限迴圈)
-        if len(relaxed_filter) < len(metadata_filter):
-            st.toast("⚠️ 嚴格條件下書目不足，系統已自動放寬搜尋範圍 (保留年齡，放寬型式)...") # 提示使用者
+        # 3. 準備放寬條件：保留「適讀年齡」，刪除其他
+        relaxed_filter = {}
+        if "適讀年齡" in active_filters:
+            relaxed_filter["適讀年齡"] = active_filters["適讀年齡"]
+        
+        # 只有當真的有東西被拿掉時，才執行
+        if len(relaxed_filter) < len(active_filters):
+            st.toast("⚠️ 嚴格條件下書目不足，系統已自動放寬搜尋範圍 (保留年齡，放寬型式)...")
             
-            # 4. 第二輪：放寬搜尋 (Broad Search)
+            # 4. 第二輪：放寬搜尋
             results_broad = run_search(relaxed_filter)
             
-            # 5. 智慧合併 (Smart Merge)
-            # 邏輯：先放「嚴格匹配」的書，後面接「放寬匹配但分數高」的書
-            # 必須去除重複
+            # 5. 合併
             seen_isbns = set(item['doc'].metadata.get('ISBN') for item in results_strict)
-            
             for item in results_broad:
                 isbn = item['doc'].metadata.get('ISBN')
                 if isbn not in seen_isbns:
-                    # 標記這是放寬條件找來的
                     item['matched_via'].append("(放寬)") 
                     final_results.append(item)
     
-    # 6. 最後排序與切截
-    # 雖然合併了，但我們還是希望分數高的排前面
+    # 6. 排序與過濾
     final_results.sort(key=lambda x: x["score"], reverse=True)
     
-    # 7. [保留您之前的建議] 設定底線過濾雜訊
-    # 只顯示分數 > 0.68 的書，確保主題相關
+    # 底線過濾 (0.68)
     filtered_list = [item for item in final_results if item['score'] >= 0.68]
     
     if not filtered_list and final_results:
-         # 如果真的都很低分，至少給前 3 名，不要空白
         return final_results[:3]
         
     return filtered_list[:15]
