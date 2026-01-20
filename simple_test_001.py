@@ -415,7 +415,7 @@ if st.button("🔍 搜尋"):
                             title_display = f"### {rank}. 《{title}》"
                             
                             # 如果有高分評分，加個獎盃
-                            if rating >= 4.0: 
+                            if rating >= 2.0: 
                                 title_display += " 🏆"
 
                             if is_strict:
