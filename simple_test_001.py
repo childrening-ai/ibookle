@@ -302,7 +302,7 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
 
     return final_results[:15]
 
-# ================= 5. Layer 5: 閱讀夥伴導讀生成器 =================
+# ================= 5. Layer 5: 閱讀夥伴導讀生成器 (正確語法加固版) =================
 def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
     """
     Layer 5: 領讀人模式 - 在清單前產出暖心導讀
@@ -310,55 +310,59 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
     if not search_results:
         return "您好！我翻遍了書櫃暫時沒看到完全吻合的書。要不要試著換個說法，或是跟我說說孩子的年級？我一定再幫您找找看。"
 
-    # --- [判定邏輯] 模糊 vs 精確 ---
-    # 模糊定義：沒有篩選條件 (例如只搜「天氣」) 或 只有對象沒有主題
-    keywords = ai_analysis.get("search_keywords", "").strip()
-    filters = ai_analysis.get("filters", {})
-    active_filter_count = sum(1 for v in filters.values() if v)
-    
-    is_vague = True if active_filter_count == 0 else False
-
-    # --- [素材準備] 擷取前 5 本書的專家導讀 (Refine_Content) ---
-    context_materials = ""
-    for i, item in enumerate(search_results[:5], 1):
-        meta = item['doc'].metadata
-        title = meta.get('Title', '未知')
-        # 夥伴說 Refine_Content 字數固定，直接全量帶入
-        expert_view = meta.get('Refine_Content', '這本書深受專家推薦，值得一讀。')
-        context_materials += f"【書名{i}】：{title}\n【專家導讀點】：{expert_view}\n\n"
-
-    # --- [Prompt 設定] 父母圈夥伴語氣 ---
-    if is_vague:
-        prompt_text = f"""
-        你是一位在父母圈裡熱心、溫暖且專業的「閱讀夥伴」。
-        使用者提問："{user_query}" (這是一個較廣的需求)
-        
-        【任務指令】
-        1. 開頭請說「您好！」，語氣要像老朋友聊天，不要像 AI。
-        2. 說明這個主題很棒，你先從 ibookle 口袋名單挑了幾本「專家三星首選」的經典神書。
-        3. 根據下方素材，誠懇地介紹這幾本書：
-        {context_materials}
-        4. 溫柔地追問更多細節（如：孩子的年級、特定興趣），例如：「對了，不知道你們家孩子幾年級了？或是他對這主題有什麼特別好奇的地方嗎？」
-        5. 禁止表情符號，約 150-200 字，繁體中文。
-        """
-    else:
-        prompt_text = f"""
-        你是一位與家長並肩作戰、懂書也懂孩子的「閱讀夥伴」。
-        使用者需求："{user_query}"
-        
-        【任務指令】
-        1. 開頭請說「您好！」，展現出收到需求後「讓我們一起來解決」的熱情。
-        2. 根據下方的專家導讀素材，將這幾本書串成一個「共讀建議」：
-        {context_materials}
-        3. 說明為什麼這組書能精準滿足對方的需求，強調這是結合 ibookle 專家觀點的精選。
-        4. 禁止表情符號，語氣平易近人。約 200 字，繁體中文。
-        """
-
-    prompt = ChatPromptTemplate.from_messages([("human", prompt_text)])
-    chain = prompt | llm_model
     try:
-        return chain.invoke({}).content
+        # --- [判定邏輯] 確保 filters 存在且為字典 ---
+        # 這是最容易報錯的地方，加個防呆
+        safe_filters = ai_analysis.get("filters", {}) if isinstance(ai_analysis, dict) else {}
+        active_filter_count = sum(1 for v in safe_filters.values() if v)
+        is_vague = True if active_filter_count == 0 else False
+
+        # --- [素材準備] ---
+        context_materials = ""
+        for i, item in enumerate(search_results[:5], 1):
+            meta = item['doc'].metadata
+            title = meta.get('Title', '未知')
+            expert_view = meta.get('Refine_Content', '這本書深受專家推薦，值得一讀。')
+            context_materials += f"【書名{i}】：{title}\n【專家導讀點】：{expert_view}\n\n"
+
+        # --- [Prompt 設定] 100% 回歸你之前的完整指令 ---
+        if is_vague:
+            prompt_text = f"""
+            你是一位在父母圈裡熱心、溫暖且專業的「閱讀夥伴」。
+            使用者提問："{user_query}" (這是一個較廣的需求)
+            
+            【任務指令】
+            1. 開頭請說「您好！」，語氣要像老朋友聊天，不要像 AI。
+            2. 說明這個主題很棒，你先從 ibookle 口袋名單挑了幾本「專家三星首選」的經典神書。
+            3. 根據下方素材，誠懇地介紹這幾本書：
+            {context_materials}
+            4. 溫柔地追問更多細節（如：孩子的年級、特定興趣），例如：「對了，不知道你們家孩子幾年級了？或是他對這主題有什麼特別好奇的地方嗎？」
+            5. 禁止表情符號，約 150-200 字，繁體中文。
+            """
+        else:
+            prompt_text = f"""
+            你是一位與家長並肩作戰、懂書也懂孩子的「閱讀夥伴」。
+            使用者需求："{user_query}"
+            
+            【任務指令】
+            1. 開頭請說「您好！」，展現出收到需求後「讓我們一起來解決」的熱情。
+            2. 根據下方的專家導讀素材，將這幾本書串成一個「共讀建議」：
+            {context_materials}
+            3. 說明為什麼這組書能精準滿足對方的需求，強調這是結合 ibookle 專家觀點的精選。
+            4. 禁止表情符號，語氣平易近人。約 200 字，繁體中文。
+            """
+
+        # --- [執行呼叫] 修正為 LangChain 穩定的 invoke 格式 ---
+        prompt = ChatPromptTemplate.from_messages([("human", "{text}")])
+        chain = prompt | llm_model
+        
+        # 執行並直接回傳內容
+        response = chain.invoke({"text": prompt_text})
+        return response.content
+
     except Exception as e:
+        # 如果還是失敗，我們可以從 Streamlit 的後台 console 看到 e 的內容
+        print(f"DEBUG - Layer 5 Error: {e}")
         return f"您好！剛才我的思緒稍微斷了一下，不過下方的書單都是我為您挑出的寶藏，您可以先看看喔！"
 
 # ================= 6. UI 與控制器 (Layer 3 整合) =================
