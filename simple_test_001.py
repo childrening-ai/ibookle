@@ -361,44 +361,6 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
     except Exception as e:
         return f"您好！剛才我的思緒稍微斷了一下，不過下方的書單都是我為您挑出的寶藏，您可以先看看喔！"
 
-# ================= 6. UI 控制器 (整合版) =================
-# ... (前面初始化代碼保持不變) ...
-
-if st.button("🔍 搜尋"):
-    if not query:
-        st.warning("請輸入內容")
-    else:
-        with st.spinner("🧠 ibookle 夥伴正在為您翻閱書櫃..."):
-            # Step 1: Layer 3 分析
-            ai_analysis = layer_3_analyze_intent(query, llm_brain)
-            refined_query = ai_analysis.get("search_keywords", query)
-            extracted_filters = ai_analysis.get("filters", {})
-
-            # Step 2: Layer 4 檢索 (支援 $in 陣列 OR 邏輯)
-            # 注意：此處需包含我們之前改過的支援 isinstance(v, list) 的版本
-            final_display_list = dual_track_search(
-                query=refined_query, 
-                metadata_filter=extracted_filters
-            )
-
-            if final_display_list:
-                # --- [關鍵順序] 先出 Layer 5 導讀 ---
-                st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
-                report_text = layer_5_generate_report(query, ai_analysis, final_display_list, llm_brain)
-                
-                with st.chat_message("assistant"):
-                    st.write(report_text)
-                
-                st.divider()
-
-                # --- [Step 3] 後出 書籍清單 ---
-                st.markdown("### 📚 為您準備的精選清單")
-                for rank, item in enumerate(final_display_list, 1):
-                    # ... (此處接原本顯示書卡 col_img, col_info 的代碼) ...
-                    pass
-            else:
-                st.warning("找不到結果，要不要試著換個關鍵字呢？")
-
 # ================= 6. UI 與控制器 (Layer 3 整合) =================
 try:
     db_shell, db_core, llm_brain = get_search_engines()
@@ -476,7 +438,7 @@ if st.button("🔍 搜尋"):
             
             st.divider()
             # =================================
-            
+
             st.success(f"根據 AI 分析，為您找到 {len(final_display_list)} 本符合條件的書：")
             
             for rank, item in enumerate(final_display_list, 1):
