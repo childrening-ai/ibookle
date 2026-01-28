@@ -302,6 +302,103 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
 
     return final_results[:15]
 
+# ================= 5. Layer 5: 閱讀夥伴導讀生成器 =================
+def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
+    """
+    Layer 5: 領讀人模式 - 在清單前產出暖心導讀
+    """
+    if not search_results:
+        return "您好！我翻遍了書櫃暫時沒看到完全吻合的書。要不要試著換個說法，或是跟我說說孩子的年級？我一定再幫您找找看。"
+
+    # --- [判定邏輯] 模糊 vs 精確 ---
+    # 模糊定義：沒有篩選條件 (例如只搜「天氣」) 或 只有對象沒有主題
+    keywords = ai_analysis.get("search_keywords", "").strip()
+    filters = ai_analysis.get("filters", {})
+    active_filter_count = sum(1 for v in filters.values() if v)
+    
+    is_vague = True if active_filter_count == 0 else False
+
+    # --- [素材準備] 擷取前 5 本書的專家導讀 (Refine_Content) ---
+    context_materials = ""
+    for i, item in enumerate(search_results[:5], 1):
+        meta = item['doc'].metadata
+        title = meta.get('Title', '未知')
+        # 夥伴說 Refine_Content 字數固定，直接全量帶入
+        expert_view = meta.get('Refine_Content', '這本書深受專家推薦，值得一讀。')
+        context_materials += f"【書名{i}】：{title}\n【專家導讀點】：{expert_view}\n\n"
+
+    # --- [Prompt 設定] 父母圈夥伴語氣 ---
+    if is_vague:
+        prompt_text = f"""
+        你是一位在父母圈裡熱心、溫暖且專業的「閱讀夥伴」。
+        使用者提問："{user_query}" (這是一個較廣的需求)
+        
+        【任務指令】
+        1. 開頭請說「您好！」，語氣要像老朋友聊天，不要像 AI。
+        2. 說明這個主題很棒，你先從 ibookle 口袋名單挑了幾本「專家三星首選」的經典神書。
+        3. 根據下方素材，誠懇地介紹這幾本書：
+        {context_materials}
+        4. 溫柔地追問更多細節（如：孩子的年級、特定興趣），例如：「對了，不知道你們家孩子幾年級了？或是他對這主題有什麼特別好奇的地方嗎？」
+        5. 禁止表情符號，約 150-200 字，繁體中文。
+        """
+    else:
+        prompt_text = f"""
+        你是一位與家長並肩作戰、懂書也懂孩子的「閱讀夥伴」。
+        使用者需求："{user_query}"
+        
+        【任務指令】
+        1. 開頭請說「您好！」，展現出收到需求後「讓我們一起來解決」的熱情。
+        2. 根據下方的專家導讀素材，將這幾本書串成一個「共讀建議」：
+        {context_materials}
+        3. 說明為什麼這組書能精準滿足對方的需求，強調這是結合 ibookle 專家觀點的精選。
+        4. 禁止表情符號，語氣平易近人。約 200 字，繁體中文。
+        """
+
+    prompt = ChatPromptTemplate.from_messages([("human", prompt_text)])
+    chain = prompt | llm_model
+    try:
+        return chain.invoke({}).content
+    except Exception as e:
+        return f"您好！剛才我的思緒稍微斷了一下，不過下方的書單都是我為您挑出的寶藏，您可以先看看喔！"
+
+# ================= 6. UI 控制器 (整合版) =================
+# ... (前面初始化代碼保持不變) ...
+
+if st.button("🔍 搜尋"):
+    if not query:
+        st.warning("請輸入內容")
+    else:
+        with st.spinner("🧠 ibookle 夥伴正在為您翻閱書櫃..."):
+            # Step 1: Layer 3 分析
+            ai_analysis = layer_3_analyze_intent(query, llm_brain)
+            refined_query = ai_analysis.get("search_keywords", query)
+            extracted_filters = ai_analysis.get("filters", {})
+
+            # Step 2: Layer 4 檢索 (支援 $in 陣列 OR 邏輯)
+            # 注意：此處需包含我們之前改過的支援 isinstance(v, list) 的版本
+            final_display_list = dual_track_search(
+                query=refined_query, 
+                metadata_filter=extracted_filters
+            )
+
+            if final_display_list:
+                # --- [關鍵順序] 先出 Layer 5 導讀 ---
+                st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
+                report_text = layer_5_generate_report(query, ai_analysis, final_display_list, llm_brain)
+                
+                with st.chat_message("assistant"):
+                    st.write(report_text)
+                
+                st.divider()
+
+                # --- [Step 3] 後出 書籍清單 ---
+                st.markdown("### 📚 為您準備的精選清單")
+                for rank, item in enumerate(final_display_list, 1):
+                    # ... (此處接原本顯示書卡 col_img, col_info 的代碼) ...
+                    pass
+            else:
+                st.warning("找不到結果，要不要試著換個關鍵字呢？")
+
 # ================= 6. UI 與控制器 (Layer 3 整合) =================
 try:
     db_shell, db_core, llm_brain = get_search_engines()
@@ -369,6 +466,17 @@ if st.button("🔍 搜尋"):
 
         # --- 結果顯示 ---
         if final_display_list:
+            # =========== [導讀置頂] ===========
+            st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
+            # 確保這裡傳入了 ai_analysis
+            report_text = layer_5_generate_report(query, ai_analysis, final_display_list, llm_brain)
+            
+            with st.chat_message("assistant"):
+                st.write(report_text)
+            
+            st.divider()
+            # =================================
+            
             st.success(f"根據 AI 分析，為您找到 {len(final_display_list)} 本符合條件的書：")
             
             for rank, item in enumerate(final_display_list, 1):
