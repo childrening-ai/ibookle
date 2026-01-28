@@ -361,9 +361,8 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
         return response.content
 
     except Exception as e:
-        # 如果還是失敗，我們可以從 Streamlit 的後台 console 看到 e 的內容
-        print(f"DEBUG - Layer 5 Error: {e}")
-        return f"您好！剛才我的思緒稍微斷了一下，不過下方的書單都是我為您挑出的寶藏，您可以先看看喔！"
+        # 這樣你會直接在網頁上看到報錯原因，例如 "name 'llm_model' is not defined"
+        return f"🚨 偵錯訊息：{str(e)}"
 
 # ================= 6. UI 與控制器 (Layer 3 整合) =================
 try:
