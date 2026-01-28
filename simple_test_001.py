@@ -195,8 +195,18 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
         )
         return [{"doc": doc, "score": 1.0, "matched_via": ["🚀 直通車"], "is_direct_hit": True} for doc, score in results]
 
-    # 清洗 Filter
-    active_filters = {k: v for k, v in metadata_filter.items() if v} if metadata_filter else {}
+    # --- [關鍵修正] 清洗與轉換 Filter，支援陣列 OR 搜尋 ($in) ---
+    active_filters = {}
+    if metadata_filter:
+        for k, v in metadata_filter.items():
+            if v:  # 確保標籤不是 None 或空值
+                if isinstance(v, list):
+                    # 如果 AI 傳回的是陣列 (例如：['6～9歲', '9～12歲'])
+                    # 我們將其轉為 Pinecone 的 $in 運算子，這代表資料庫會執行 OR 邏輯
+                    active_filters[k] = {"$in": v}
+                else:
+                    # 如果是單一字串 (例如：'漫畫')，維持原樣進行精準比對
+                    active_filters[k] = v
 
     # --- 內部搜尋函式 ---
     def run_search(current_filter):
