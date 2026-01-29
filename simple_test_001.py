@@ -371,7 +371,7 @@ except Exception as e:
     st.error(f"連線失敗: {e}")
     st.stop()
 
-st.title("📚 ibookle 搜尋引擎 (Layer 3 智慧版)")
+st.title("📚 ibookle 搜尋引擎 (Layer 5)")
 st.caption("Layer 3: AI 幫你拆解關鍵字與篩選條件")
 
 query = st.text_input("輸入關鍵字 (試試：小一的恐龍漫畫、小孩做事拖拖拉拉)...", value="")
