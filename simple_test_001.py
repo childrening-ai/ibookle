@@ -458,6 +458,8 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_
     except Exception as e:
         return f"🚨 導讀生成失敗：{str(e)}"
 
+
+
 # ================= 6. UI 與控制器 (Layer 3 整合) =================
 try:
     db_shell, db_core, llm_brain = get_search_engines()
@@ -465,6 +467,86 @@ except Exception as e:
     st.error(f"連線失敗: {e}")
     st.stop()
 
+# ================= UI 介面樣式 (視覺深度優化) =================
+st.markdown("""
+    <style>
+    /* 隱藏預設元件，讓介面更像獨立產品 */
+    #MainMenu, footer, header {visibility: hidden; height: 0;}
+    div[data-testid="stStatusWidget"], .stAppViewFooter, [data-testid="stDecoration"], [data-testid="stHeader"] { display: none !important; }
+    button[title="View fullscreen"] { display: none !important; }
+
+    /* 1. 側邊欄按鈕樣式 */
+    [data-testid="stSidebarCollapsedControl"] {
+        background-color: #E67E22 !important;
+        border-radius: 50% !important;
+        width: 40px !important;
+        height: 40px !important;
+        left: 15px !important;
+        top: 15px !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: white !important;
+        transform: scale(1.2);
+    }
+
+    /* 2. 搜尋框橘色聚焦與圓角 */
+    .stTextInput input {
+        border: 2px solid #E67E22 !important;
+        border-radius: 25px !important;
+    }
+    .stTextInput input:focus {
+        border-color: #D35400 !important;
+        box-shadow: 0 0 0 1px #D35400 !important;
+        outline: none !important;
+    }
+    
+    /* 3. 調整導讀文字區域的間距與美感 */
+    .stChatMessage {
+        background-color: #FFF5E6 !important; /* 極淺橘底色 */
+        border-radius: 15px !important;
+    }
+
+    /* 4. 側邊欄美化 */
+    [data-testid="stSidebar"] {
+        background-color: #FDFEFE !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# ================= 側邊欄：計次、燈號與問卷 =================
+with st.sidebar:
+    st.header("📊 ibookle 統計")
+    total_answers = "---"
+    system_status = "🔴 系統連線中..."
+    
+    # 嘗試讀取行數
+    sheet_data = get_google_sheet()
+    if sheet_data:
+        try:
+            # 取得所有數值，減去第一行標題
+            total_answers = len(sheet_data.get_all_values()) - 1
+            system_status = "🟢 系統正常運作"
+        except:
+            system_status = "🟡 系統忙碌中"
+    
+    st.metric("已解答家長疑問", f"{total_answers} 次")
+    st.write(system_status)
+    st.divider()
+    
+    st.subheader("📢 意見回饋")
+    st.write("您的建議是我們進步的動力")
+    # 請替換為您實際的問卷連結
+    st.link_button("📝 填寫使用問卷", "https://your-google-form-link", use_container_width=True)
+    
+    st.divider()
+    st.caption(f"Session: {st.session_state.session_id}")
+    st.caption("© 2026 ibookle")
+
+# --- [3. 這是原本的標題顯示] ---
 st.title("📚 ibookle 搜尋引擎 (Layer 5)")
 st.caption("Layer 3: AI 幫你拆解關鍵字與篩選條件")
 
