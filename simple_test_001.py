@@ -222,121 +222,89 @@ def layer_3_analyze_intent(user_query, llm_model):
     except Exception as e:
         return {"search_keywords": user_query, "filters": {}}
 
-# ================= [修正] Layer 4: 分層排序 (Tiered Sorting) =================
+# ================= [修正] Layer 4: 分層排序 (Tiered Sorting) 更新20260217=================
 def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=None):
     # --- 模式 A: 直通車 (維持不變) ---
     if exact_title_filter:
         results = db_shell.similarity_search_with_score(
             exact_title_filter, k=1, filter={"Title": exact_title_filter}
         )
-        return [{"doc": doc, "score": 1.0, "matched_via": ["🚀 直通車"], "is_direct_hit": True} for doc, score in results]
+        # 為直通車返回預設值，並標註 is_relaxed 為 False
+        return [{"doc": doc, "score": 1.0, "matched_via": ["🚀 直通車"], "is_direct_hit": True, "is_strict_match": True} for doc, score in results], False
 
     # --- [關鍵修正] 清洗與轉換 Filter，支援陣列 OR 搜尋 ($in) ---
     active_filters = {}
     if metadata_filter:
         for k, v in metadata_filter.items():
-            if v:  # 確保標籤不是 None 或空值
+            if v:  
                 if isinstance(v, list):
-                    # 如果 AI 傳回的是陣列 (例如：['6～9歲', '9～12歲'])
-                    # 我們將其轉為 Pinecone 的 $in 運算子，這代表資料庫會執行 OR 邏輯
                     active_filters[k] = {"$in": v}
                 else:
-                    # 如果是單一字串 (例如：'漫畫')，維持原樣進行精準比對
                     active_filters[k] = v
 
     # --- 內部搜尋函式 ---
-    def run_search(current_filter):
-        candidates = {}
-        try:
-            r_shell = db_shell.similarity_search_with_score(query, k=top_k, filter=current_filter)
-            r_core = db_core.similarity_search_with_score(query, k=top_k, filter=current_filter)
-        except: return []
+    def fetch(f):
+        temp_candidates = {}
+        for db, label in [(db_shell, "殼"), (db_core, "核")]:
+            try:
+                res = db.similarity_search_with_score(query, k=10, filter=f)
+                for doc, score in res:
+                    bid = doc.metadata.get('ISBN') or doc.metadata.get('Title')
+                    if not bid: continue
+                    if bid in temp_candidates:
+                        if score > temp_candidates[bid]["score"]: 
+                            temp_candidates[bid]["score"] = score
+                    else:
+                        temp_candidates[bid] = {"doc": doc, "score": score, "is_strict_match": True}
+            except Exception as e:
+                print(f"Search Error: {e}")
+        return temp_candidates
 
-        for doc, score in r_shell:
-            bid = doc.metadata.get('ISBN') or doc.metadata.get('Title')
-            if not bid: continue
-            candidates[bid] = {"doc": doc, "score": score, "matched_via": ["殼"], "is_direct_hit": False}
-
-        for doc, score in r_core:
-            bid = doc.metadata.get('ISBN') or doc.metadata.get('Title')
-            if not bid: continue
-            if bid in candidates:
-                if score > candidates[bid]["score"]: candidates[bid]["score"] = score
-                candidates[bid]["matched_via"].append("核")
-            else:
-                candidates[bid] = {"doc": doc, "score": score, "matched_via": ["核"], "is_direct_hit": False}
-        
-        # 這裡只做內部排序
-        final = list(candidates.values())
-        final.sort(key=lambda x: x["score"], reverse=True)
-        return final
-
-    # ==========================
-    # 🚀 兩階段搜尋 + 分層排序
-    # ==========================
+    # --- 1. 執行第一輪：嚴格搜尋 (Strict Search) ---
+    strict_results = fetch(active_filters)
+    strict_list = sorted(list(strict_results.values()), key=lambda x: x["score"], reverse=True)
     
-    # 1. 第一輪：嚴格搜尋 (Strict Search)
-    results_strict = run_search(active_filters)
+    # 判定高品質命中數量 (門檻 0.75)
+    high_quality_count = sum(1 for item in strict_list if item['score'] > 0.75)
     
-    # 為第一輪結果加上標記，證明它們是「完全符合」
-    for item in results_strict:
-        item['is_strict_match'] = True
-
-    # 2. 判斷是否需要放寬
-    # 這裡的邏輯維持：如果嚴格符合的好書太少 (<3)，且有型式/注音限制，就放寬
-    high_quality_count = sum(1 for item in results_strict if item['score'] > 0.72)
-    
-    results_broad = [] # 初始化第二輪結果
-    
+    # --- 2. 判定是否啟動放寬搜尋 (Relaxation) ---
+    is_relaxed = False
+    broad_results = {}
     droppable_keys = ["型式", "注音", "注音標籤"]
-    has_droppable_filters = any(key in active_filters for key in droppable_keys)
+    has_droppable = any(k in active_filters for k in droppable_keys)
 
-    if high_quality_count < 3 and has_droppable_filters:
-        relaxed_filter = {}
-        if "適讀年齡" in active_filters:
-            relaxed_filter["適讀年齡"] = active_filters["適讀年齡"]
-        
-        if len(relaxed_filter) < len(active_filters):
-            st.toast("⚠️ 嚴格條件下書目不足，已自動補入相關主題書籍...")
-            
-            # 第二輪：放寬搜尋
-            results_broad = run_search(relaxed_filter)
+    if high_quality_count < 3 and has_droppable:
+        is_relaxed = True
+        # 放寬篩選：僅保留「適讀年齡」
+        relaxed_filter = {"適讀年齡": active_filters["適讀年齡"]} if "適讀年齡" in active_filters else {}
+        broad_results = fetch(relaxed_filter)
 
-    # 3. [關鍵修正] 分層合併 (Tiered Merge)
-    # 我們不把兩包混在一起 sort，而是「先排 Strict，再排 Broad」
-    
-    final_results = []
-    
-    # A. 先放：嚴格符合的書 (Strict)
-    # 這裡面已經按分數排好了
+    # --- 3. [核心移植] 全域排序邏輯 ---
+    combined_results = []
     seen_isbns = set()
-    for item in results_strict:
-        # 即使是嚴格符合，分數也不能太難看 (例如 < 0.68)
+
+    # 合併 Strict (門檻 0.68)
+    for item in strict_list:
         if item['score'] >= 0.68:
-            final_results.append(item)
+            item['is_strict_match'] = True
+            combined_results.append(item)
             seen_isbns.add(item['doc'].metadata.get('ISBN'))
 
-    # B. 後放：放寬條件的書 (Broad)
-    # 只有當嚴格符合的書還沒塞滿 15 本時，才從後面補
-    if results_broad:
-        for item in results_broad:
+    # 合併 Broad (補書，門檻 0.68)
+    if is_relaxed:
+        broad_list = sorted(list(broad_results.values()), key=lambda x: x["score"], reverse=True)
+        for item in broad_list:
             isbn = item['doc'].metadata.get('ISBN')
-            # 1. 沒重複 2. 分數及格
             if isbn not in seen_isbns and item['score'] >= 0.68:
-                # 標記這是放寬的
-                item['matched_via'].append("(延伸推薦)") 
                 item['is_strict_match'] = False
-                final_results.append(item)
+                combined_results.append(item)
+                seen_isbns.add(isbn)
     
-    # 防呆：如果真的都沒書，放寬底線勉強顯示前 3 名
-    if not final_results:
-        # 嘗試從 broad 裡撈前三名 (不管分數)
-        if results_broad:
-            return results_broad[:3]
-        # 還是沒有，就回傳 strict 的原始結果
-        return results_strict[:3]
+    # 全局按分數重新排序，這確保了「誰準誰排第一」
+    final_results = sorted(combined_results, key=lambda x: x["score"], reverse=True)
 
-    return final_results[:15]
+    # 返回結果清單與放寬標記
+    return final_results[:15], is_relaxed
 
 # ================= 5. Layer 5: 閱讀夥伴導讀生成器 (正確語法加固版) =================
 def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
@@ -440,9 +408,9 @@ if st.button("🔍 搜尋"):
                     st.markdown(f"**🛡️ 提取篩選條件**：\n`{extracted_filters}`")
 
             # --- [Step 3] Layer 4 執行搜尋 (帶入參數) ---
-            semantic_results = dual_track_search(
-                query=refined_query,           # 用變聰明的關鍵字
-                metadata_filter=extracted_filters # 用 AI 提取的篩選條件
+            semantic_results, is_relaxed_triggered = dual_track_search(
+                query=refined_query,
+                metadata_filter=extracted_filters
             )
             
             # --- [Step 4] 混合直通車與語意搜尋結果 ---
