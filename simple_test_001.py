@@ -243,6 +243,7 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
                     active_filters[k] = v
 
     # --- 內部搜尋函式 ---
+    # --- 內部搜尋函式 (修正版：加入標籤追蹤) ---
     def fetch(f):
         temp_candidates = {}
         for db, label in [(db_shell, "殼"), (db_core, "核")]:
@@ -251,11 +252,22 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
                 for doc, score in res:
                     bid = doc.metadata.get('ISBN') or doc.metadata.get('Title')
                     if not bid: continue
+                    
                     if bid in temp_candidates:
+                        # 如果這本書已經在另一個庫被搜到過
                         if score > temp_candidates[bid]["score"]: 
                             temp_candidates[bid]["score"] = score
+                        # 將新的來源標籤加入列表 (例如變成 ["殼", "核"])
+                        if label not in temp_candidates[bid]["matched_via"]:
+                            temp_candidates[bid]["matched_via"].append(label)
                     else:
-                        temp_candidates[bid] = {"doc": doc, "score": score, "is_strict_match": True}
+                        # 第一次搜到這本書
+                        temp_candidates[bid] = {
+                            "doc": doc, 
+                            "score": score, 
+                            "is_strict_match": True,
+                            "matched_via": [label] # 👈 關鍵：初始化來源標籤
+                        }
             except Exception as e:
                 print(f"Search Error: {e}")
         return temp_candidates
