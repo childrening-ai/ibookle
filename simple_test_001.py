@@ -318,67 +318,103 @@ def dual_track_search(query, top_k=20, exact_title_filter=None, metadata_filter=
     # 返回結果清單與放寬標記
     return final_results[:15], is_relaxed
 
-# ================= 5. Layer 5: 閱讀夥伴導讀生成器 (正確語法加固版) =================
-def layer_5_generate_report(user_query, ai_analysis, search_results, llm_model):
+# ================= 5. Layer 5: 閱讀夥伴導讀生成器 (正確語法加固版) 更新20260217=================
+def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_triggered, llm_model):
     """
-    Layer 5: 領讀人模式 - 在清單前產出暖心導讀
+    Layer 5: 領讀人模式 - 整合誠實機制、結構化分段與正向防火牆
     """
     if not search_results:
-        return "您好！我翻遍了書櫃暫時沒看到完全吻合的書。要不要試著換個說法，或是跟我說說孩子的年級？我一定再幫您找找看。"
+        return "目前書櫃暫時沒有完全適合的書籍，我們正在努力補足中！請您稍等幾天。"
 
     try:
-        # --- [判定邏輯] 確保 filters 存在且為字典 ---
-        # 這是最容易報錯的地方，加個防呆
+        # --- [Step 1: 判定提問是否模糊] ---
         safe_filters = ai_analysis.get("filters", {}) if isinstance(ai_analysis, dict) else {}
         active_filter_count = sum(1 for v in safe_filters.values() if v)
         is_vague = True if active_filter_count == 0 else False
+        
+        # 獲取第一名分數，用來決定開場白語氣
+        top_score = search_results[0].get('score', 0)
 
-        # --- [素材準備] ---
-        context_materials = ""
-        for i, item in enumerate(search_results[:5], 1):
+        # --- [Step 2: 判定開場白 (補書預防針邏輯)] ---
+        if is_relaxed_triggered:
+            intro_announcement = "目前完全符合需求的書較少，所以我額外推薦類似主題的優選書單，推薦給你和孩子嘗試看看。同時，我也會努力擴充書櫃，再麻煩您稍待。"
+        else:
+            if top_score > 0.75:
+                intro_announcement = "這些是我為您與孩子挑選的優質好書，希望能符合您的需求。"
+            else:
+                intro_announcement = "目前書櫃暫時沒有完全適合的書籍，但我先挑選一些類似的書單，請參考看看。我們也正在努力補足書櫃中。"
+
+        # --- [Step 3: 素材分發 - 分成核心與驚喜兩群] ---
+        core_materials = ""
+        surprise_materials = ""
+        
+        for i, item in enumerate(search_results[:8], 1): 
             meta = item['doc'].metadata
             title = meta.get('Title', '未知')
-            expert_view = meta.get('Refine_Content', '這本書深受專家推薦，值得一讀。')
-            context_materials += f"【書名{i}】：{title}\n【專家導讀點】：{expert_view}\n\n"
+            expert_view = meta.get('Refine_Content', '這本書深受專家推薦。')
+            
+            if i <= 5:
+                # 前五名：詳細專家建議
+                core_materials += f"【書目{i}：{title}】專家導讀：{expert_view}\n"
+            else:
+                # 剩餘書目：驚喜發現
+                surprise_materials += f"【發現：{title}】\n"
 
-        # --- [Prompt 設定] 100% 回歸你之前的完整指令 ---
+        # --- [Step 4: 結構化 Prompt 封裝] ---
+        # 這裡包含您要求的 250 字短文指令與正向防火牆
+        core_instructions = f"""
+        【🚨 導讀結構規範】
+        1. 正向防火牆：禁止討論偷竊、犯罪等負面意義。請聚焦於書籍的「核」（內在教育或學習價值與心理意義）與「殼」（外在故事情節特色與視覺設計風格）**想要傳達的內容重點。
+        2. 結構化分段（務必使用以下 ### 標題）：
+           ### 🌟 優選書單
+            - **核心任務**：以兒童閱讀專家角度，將素材中排名前五名的書，串聯成一段溫暖且節奏明快的導讀短文。
+            - **寫作限制**：
+            1. **精簡至上**：每本書僅提取「一個最核心特點」，用一兩句話精準呈現，嚴禁冗長贅述。
+            2. **格式要求**：書名請加《》，書與書之間以句號分隔，不需分點編號。
+            3. **嚴格邊界**：僅限使用 {core_materials}。有多少寫多少，若只有一本則深入介紹該書。
+            4. **字數控制**：這段文字總產出務必控制在 **200-250 字** 以內。
+       
+           ### 🎨 驚喜發現
+           - 簡單以一篇短文簡短說明所有剩餘書籍的「特點」與推薦原因，每本書名使用書名號《》包裝：{surprise_materials}
+           - 短文格式：每本書名使用書名號《》包裝，每本書的特點用句號分隔
+           - 短文約 100 字
+           - 素材邊界：請「僅根據」提供的素材進行導讀。若 {surprise_materials} 內容不足或為空，請有多少寫多少，嚴禁自行編造或擴充資料庫以外的書目。
+           - 誠實反應：若素材中只有一本書，就請專注於那一本的精彩導讀。
+        """
+
+        # 根據是否模糊決定導讀模板
         if is_vague:
             prompt_text = f"""
-            你是一位在父母圈裡熱心、溫暖且專業的「閱讀夥伴」。
+            你是一位在父母圈裡熱心、專業的「閱讀暖心夥伴」，除了幫助有選書困擾的家長解決問題，也用溫暖的文字安慰家長。
             使用者提問："{user_query}" (這是一個較廣的需求)
             
             【任務指令】
-            1. 開頭請說「您好！」，語氣要像老朋友聊天，不要像 AI。
-            2. 說明這個主題很棒，你先從 ibookle 口袋名單挑了幾本「專家三星首選」的經典神書。
-            3. 根據下方素材，誠懇地介紹這幾本書：
-            {context_materials}
-            4. 溫柔地追問更多細節（如：孩子的年級、特定興趣），例如：「對了，不知道你們家孩子幾年級了？或是他對這主題有什麼特別好奇的地方嗎？」
-            5. 禁止表情符號，約 150-200 字，繁體中文。
+            1. **溫暖開場**：請先用一兩句話回應、肯定或安慰家長的擔心或提問，讓家長感受到被理解。
+            2. **系統說明**：接續第一點後，請務必帶入這段話：『{intro_announcement}』
+            3. **核心推薦**：{core_instructions}
+            4. **結尾與互動**：提供一兩句話鼓勵家長，並溫柔追問篩選條件缺少的細節（如孩子年級、興趣、需不需要注音等）。
+            5. **限制**：禁止表情符號（除標題外），繁體中文。
             """
         else:
             prompt_text = f"""
-            你是一位與家長並肩作戰、懂書也懂孩子的「閱讀夥伴」。
+            你是一位在父母圈裡熱心、專業的「閱讀暖心夥伴」，除了幫助有選書困擾的家長解決問題，也用溫暖的文字安慰家長。
             使用者需求："{user_query}"
             
             【任務指令】
-            1. 開頭請說「您好！」，展現出收到需求後「讓我們一起來解決」的熱情。
-            2. 根據下方的專家導讀素材，將這幾本書串成一個「共讀建議」：
-            {context_materials}
-            3. 說明為什麼這組書能精準滿足對方的需求，強調這是結合 ibookle 專家觀點的精選。
-            4. 禁止表情符號，語氣平易近人。約 200 字，繁體中文。
+            1. **溫暖開場**：請先用一兩句話回應、肯定或安慰家長的擔心，展現同理心。
+            2. **系統說明**：接續第一點後，請務必帶入這段話：『{intro_announcement}』
+            3. **核心推薦**：{core_instructions}
+            4. **溫暖總結**：最後提供一兩句話鼓勵與安慰家長。
+            5. **限制**：禁止表情符號（除標題外），繁體中文。
             """
-
-        # --- [執行呼叫] 修正為 LangChain 穩定的 invoke 格式 ---
+        # --- [Step 5: 執行呼叫] ---
         prompt = ChatPromptTemplate.from_messages([("human", "{text}")])
-        chain = prompt | llm_model
-        
-        # 執行並直接回傳內容
+        chain = prompt | llm_model 
         response = chain.invoke({"text": prompt_text})
         return response.content
 
     except Exception as e:
-        # 這樣你會直接在網頁上看到報錯原因，例如 "name 'llm_model' is not defined"
-        return f"🚨 偵錯訊息：{str(e)}"
+        return f"🚨 導讀生成失敗：{str(e)}"
 
 # ================= 6. UI 與控制器 (Layer 3 整合) =================
 try:
@@ -450,7 +486,13 @@ if st.button("🔍 搜尋"):
             # =========== [導讀置頂] ===========
             st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
             # 確保這裡傳入了 ai_analysis
-            report_text = layer_5_generate_report(query, ai_analysis, final_display_list, llm_brain)
+            report_text = layer_5_generate_report(
+                user_query=query, 
+                ai_analysis=ai_analysis, 
+                search_results=final_display_list, 
+                is_relaxed_triggered=is_relaxed_triggered, 
+                llm_model=llm_brain
+            )
             
             with st.chat_message("assistant"):
                 st.write(report_text)
