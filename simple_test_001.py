@@ -3,6 +3,8 @@ import os
 import re
 import json
 import pandas as pd
+import json, datetime, gspread, uuid, pytz
+from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
@@ -13,6 +15,10 @@ from langchain_core.output_parsers import JsonOutputParser
 # ================= 1. 設定區 =================
 load_dotenv()
 st.set_page_config(page_title="Layer 3 AI 大腦整合版", layout="wide")
+if "session_id" not in st.session_state: 
+    st.session_state.session_id = str(uuid.uuid4())[:8]
+if "last_row_idx" not in st.session_state:
+    st.session_state.last_row_idx = None
 
 INDEX_NAME = "ibookle-dual-langchain-001" 
 CSV_PATH = "ibookle_final_upload_ready.csv" 
@@ -108,6 +114,40 @@ def layer_0_direct_hit(query):
             if score >= 80: # 門檻
                 return matched_title, score / 100.0, "TITLE"
     return None
+
+# ==========================================
+# ### --- [新移植：後台紀錄函式區] --- ###
+# ==========================================
+
+def get_google_sheet():
+    """穩定連線 Google Sheets"""
+    try:
+        if "GOOGLE_CREDENTIALS" not in st.secrets:
+            return None
+        raw_json = st.secrets["GOOGLE_CREDENTIALS"]
+        creds_info = json.loads(raw_json.strip(), strict=False)
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        client_gs = gspread.authorize(creds)
+        return client_gs.open("AI_User_Logs").worksheet("Dual_Logs")
+    except Exception as e:
+        st.sidebar.error(f"後台連線失敗: {e}") # 改用 sidebar 提示不干擾主畫面
+        return None
+
+def save_to_log(user_input, ai_keywords, is_relaxed, ai_response, recommended_books):
+    """依照後台欄位對齊：時間, SessionID, 原始提問, AI關鍵字, 補書標記, 專家建議, 推薦書清單, Feedback"""
+    try:
+        sheet = get_google_sheet()
+        if sheet:
+            tw_tz = pytz.timezone('Asia/Taipei')
+            now_tw = datetime.datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+            relaxed_tag = "已補書" if is_relaxed else "精準匹配"
+            new_row = [now_tw, st.session_state.session_id, user_input, ai_keywords, relaxed_tag, ai_response, recommended_books, ""]
+            sheet.append_row(new_row)
+            return len(sheet.get_all_values())
+        return None
+    except:
+        return None
 
 # ================= 4. [新增] Layer 3: AI 意圖分析（更新20260217） =================
 def layer_3_analyze_intent(user_query, llm_model):
@@ -483,11 +523,9 @@ if st.button("🔍 搜尋"):
             
             final_display_list.extend(semantic_results)
 
-        # --- 結果顯示 ---
+        # --- [!!! 這裡開始植入數據準備與存檔邏輯 !!!] ---
         if final_display_list:
-            # =========== [導讀置頂] ===========
-            st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
-            # 確保這裡傳入了 ai_analysis
+            # 1. 產出導讀報告 (Layer 5)
             report_text = layer_5_generate_report(
                 user_query=query, 
                 ai_analysis=ai_analysis, 
@@ -496,6 +534,31 @@ if st.button("🔍 搜尋"):
                 llm_model=llm_brain
             )
             
+            # 2. 準備存入後台的詳細書單字串 (包含分數與標籤)
+            log_book_list = []
+            for item in final_display_list:
+                t = item['doc'].metadata.get('Title', '未知')
+                s = round(item['score'], 3)
+                is_strict = item.get('is_strict_match', True)
+                raw_sources = item.get('matched_via', [])
+                source_tag = " | ".join(raw_sources) if raw_sources else ("精準" if is_strict else "延伸")
+                log_book_list.append(f"{t}({s})[{source_tag}]")
+            
+            full_books_string = " ; ".join(log_book_list)
+
+            # 3. 執行存檔至 Google Sheets
+            # 注意：這裡會將 last_row_idx 存入 Session，方便之後更新 👍/👎
+            st.session_state.last_row_idx = save_to_log(
+                user_input=query,
+                ai_keywords=refined_query,
+                is_relaxed=is_relaxed_triggered,
+                ai_response=report_text,
+                recommended_books=full_books_string
+            )
+
+
+            # 4. =========== [UI 導讀置頂顯示] ===========
+            st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
             with st.chat_message("assistant"):
                 st.write(report_text)
             
