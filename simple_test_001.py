@@ -451,7 +451,18 @@ if st.button("🔍 搜尋"):
             for rank, item in enumerate(final_display_list, 1):
                 doc = item['doc']
                 score = item['score']
-                sources = item['matched_via']
+                # [優化點 1] 來源標籤邏輯：結合核心/外殼與嚴格標籤
+                is_strict = item.get('is_strict_match', True)
+                raw_sources = item.get('matched_via', [])
+            
+                # 如果是空清單，給予基礎標籤
+                if not raw_sources:
+                    sources = ["精準匹配"] if is_strict else ["延伸推薦"]
+                else:
+                    sources = raw_sources
+                    if not is_strict and "(延伸推薦)" not in sources:
+                        sources.append("(延伸推薦)")
+            
                 is_pinned = item.get('is_direct_hit', False)
                 meta = doc.metadata
                 
@@ -529,7 +540,9 @@ if st.button("🔍 搜尋"):
                         
                     with st.expander("💡 專家導讀"):
                         st.info(meta.get('Refine_Content', ''))
-                        st.caption(f"來源: {sources} | ISBN: {meta.get('ISBN')}")
+                        # [優化點 2] 讓後台資訊更透明
+                        source_tags = " | ".join(sources)
+                        st.caption(f"數據追蹤標籤: {source_tags} | 分數: {score:.3f} | ISBN: {meta.get('ISBN')}")
                     st.divider()
         else:
             st.warning("找不到結果。可能是篩選條件太嚴格，或是資料庫中沒有符合的書。")
