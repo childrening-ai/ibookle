@@ -660,161 +660,171 @@ if st.button("🔍 搜尋"):
                 recommended_books=full_books_string
             )
 
+            # --- [!!! 這裡植入：鎖定 Session State !!!] ---
+            # 確保運算結果被存入全域記憶區，不會因為頁面刷新而消失
+            st.session_state.search_performed = True
+            st.session_state.res_display_list = final_display_list
+            st.session_state.res_report_text = report_text
+            st.session_state.res_ai_analysis = ai_analysis
+            st.session_state.res_is_relaxed = is_relaxed_triggered
+            st.session_state.res_query = query
 
-            # 4. =========== [UI 導讀置頂顯示] ===========
-            st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
-            with st.chat_message("assistant"):
-                st.write(report_text)
+# ================= [顯示邏輯區：這段不縮進，與 if st.button 平級] =================
+if st.session_state.get("search_performed"):
+    # 從記憶中取出剛才算好的東西
+    final_display_list = st.session_state.res_display_list
+    report_text = st.session_state.res_report_text
+    is_relaxed_triggered = st.session_state.res_is_relaxed
+    query = st.session_state.res_query
+    
+    # 4. =========== [UI 導讀置頂顯示] ===========
+    st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
+    with st.chat_message("assistant"):
+        st.write(report_text)            
+    st.divider()
+    # =================================
+    # --- C. 搜尋結果書卡迴圈 ---
+    if final_display_list:
+        st.success(f"根據 AI 分析，為您找到 {len(final_display_list)} 本符合條件的書：")
             
-            st.divider()
-            # =================================
-
-            st.success(f"根據 AI 分析，為您找到 {len(final_display_list)} 本符合條件的書：")
+        for rank, item in enumerate(final_display_list, 1):
+            doc = item['doc']
+            score = item['score']
+            # [優化點 1] 來源標籤邏輯：結合核心/外殼與嚴格標籤
+            is_strict = item.get('is_strict_match', True)
+            raw_sources = item.get('matched_via', [])
             
-            for rank, item in enumerate(final_display_list, 1):
-                doc = item['doc']
-                score = item['score']
-                # [優化點 1] 來源標籤邏輯：結合核心/外殼與嚴格標籤
-                is_strict = item.get('is_strict_match', True)
-                raw_sources = item.get('matched_via', [])
+            # 如果是空清單，給予基礎標籤
+            if not raw_sources:
+                sources = ["精準匹配"] if is_strict else ["延伸推薦"]
+            else:
+                sources = raw_sources
+                if not is_strict and "(延伸推薦)" not in sources:
+                    sources.append("(延伸推薦)")
             
-                # 如果是空清單，給予基礎標籤
-                if not raw_sources:
-                    sources = ["精準匹配"] if is_strict else ["延伸推薦"]
-                else:
-                    sources = raw_sources
-                    if not is_strict and "(延伸推薦)" not in sources:
-                        sources.append("(延伸推薦)")
-            
-                is_pinned = item.get('is_direct_hit', False)
-                meta = doc.metadata
+            is_pinned = item.get('is_direct_hit', False)
+            meta = doc.metadata
                 
-                title = meta.get('Title', '未知')
-                author = meta.get('Author', '未知')
-                illustrator = meta.get('Illustrator', '')
-                if str(illustrator).lower() == 'nan': illustrator = ""
-                publisher = meta.get('出版社', '未知')
-                book_format = meta.get('型式', '一般')
-                age_range = meta.get('適讀年齡', '')
-                pinyin_label = meta.get('注音標籤', '')
-                link = meta.get('書店連結', '')
+            title = meta.get('Title', '未知')
+            author = meta.get('Author', '未知')
+            illustrator = meta.get('Illustrator', '')
+            if str(illustrator).lower() == 'nan': illustrator = ""
+            publisher = meta.get('出版社', '未知')
+            book_format = meta.get('型式', '一般')
+            age_range = meta.get('適讀年齡', '')
+            pinyin_label = meta.get('注音標籤', '')
+            link = meta.get('書店連結', '')
                 
-    # [關鍵修正] 這裡定義 rating，下面才不會報錯
-                try: 
-                    rating = float(meta.get('Expert_Rating', 0))
-                except: 
-                    rating = 0.0
+            # [關鍵修正] 這裡定義 rating，下面才不會報錯
+            try: 
+                rating = float(meta.get('Expert_Rating', 0))
+            except: 
+                rating = 0.0
 
-                # 圖片
-                img_raw = str(meta.get('書封', ''))
-                img_url = None
-                if "http" in img_raw:
-                    match = re.search(r'\((http[^)]+)\)', img_raw)
-                    if match: img_url = match.group(1)
-                    elif img_raw.startswith("http"): img_url = img_raw
+            # 圖片
+            img_raw = str(meta.get('書封', ''))
+            img_url = None
+            if "http" in img_raw:
+                match = re.search(r'\((http[^)]+)\)', img_raw)
+                if match: img_url = match.group(1)
+                elif img_raw.startswith("http"): img_url = img_raw
 
-                container = st.container()
-                if is_pinned:
-                    container.markdown("#### 🎯 精準命中")
-                    container.success(f"您似乎在找這本書？")
+            container = st.container()
+            if is_pinned:
+                container.markdown("#### 🎯 精準命中")
+                container.success(f"您似乎在找這本書？")
 
-                with container:
-                    col_img, col_info = st.columns([1, 4])
-                    with col_img:
-                        if img_url: st.image(img_url, use_container_width=True)
-                        else: st.markdown("📷")
+            with container:
+                col_img, col_info = st.columns([1, 4])
+                with col_img:
+                    if img_url: st.image(img_url, use_container_width=True)
+                    else: st.markdown("📷")
                             
-                    with col_info:
-                        c1, c2 = st.columns([4, 1])
-                        with c1:
-                            # =========== [修改開始] 標題顯示邏輯 ===========
-                            # 判斷這本書是「嚴格符合」還是「放寬推薦」
-                            is_strict = item.get('is_strict_match', True) 
+                with col_info:
+                    c1, c2 = st.columns([4, 1])
+                    with c1:
+                        # =========== [修改開始] 標題顯示邏輯 ===========                                                    
+                        # 基礎標題字串
+                        title_display = f"### {rank}. 《{title}》"
                             
-                            # 基礎標題字串
-                            title_display = f"### {rank}. 《{title}》"
-                            
-                            # 如果有高分評分，加個獎盃
-                            if rating >= 2.0: 
-                                title_display += " 🏆"
+                        # 如果有高分評分，加個獎盃
+                        if rating >= 2.0: 
+                            title_display += " 🏆"
 
-                            if is_strict:
-                                # 1. 嚴格符合：正常顯示
-                                st.markdown(title_display)
-                            else:
-                                # 2. 放寬/延伸推薦：加上灰色小字標示，讓使用者知道為什麼它排在後面
-                                st.markdown(f"{title_display} <small style='color:gray; font-weight:normal'>(延伸推薦)</small>", unsafe_allow_html=True)
-                            # =========== [修改結束] ===========
-                        with c2:
-                            st.metric("關聯度", f"{score:.3f}")
+                        if is_strict:
+                            # 1. 嚴格符合：正常顯示
+                            st.markdown(title_display)
+                        else:
+                            # 2. 放寬/延伸推薦：加上灰色小字標示，讓使用者知道為什麼它排在後面
+                            st.markdown(f"{title_display} <small style='color:gray; font-weight:normal'>(延伸推薦)</small>", unsafe_allow_html=True)
+                        # =========== [修改結束] ===========
+                    with c2:
+                        st.metric("關聯度", f"{score:.3f}")
 
-                        st.caption(f"**{author}** | {publisher} | {book_format}")
+                    st.caption(f"**{author}** | {publisher} | {book_format}")
                         
-                        tags = []
-                        if age_range and age_range!='nan': tags.append(f"👶 {age_range}")
-                        if "有注音" in str(pinyin_label): tags.append("✅ 有注音")
-                        if tags: st.markdown(" ".join([f"`{t}`" for t in tags]))
+                    tags = []
+                    if age_range and age_range!='nan': tags.append(f"👶 {age_range}")
+                    if "有注音" in str(pinyin_label): tags.append("✅ 有注音")
+                    if tags: st.markdown(" ".join([f"`{t}`" for t in tags]))
 
-                        summary = meta.get('Quick_Summary', '')
-                        if str(summary)=='nan': summary="暫無"
-                        st.markdown(f"**📖 摘要**：{summary}")
-                        if link and str(link).startswith('http'):
-                            st.link_button("🛒 博客來購書", link)
+                    summary = meta.get('Quick_Summary', '')
+                    if str(summary)=='nan': summary="暫無"
+                    st.markdown(f"**📖 摘要**：{summary}")
+                    if link and str(link).startswith('http'):
+                        st.link_button("🛒 博客來購書", link)
                         
-                    with st.expander("💡 專家導讀"):
-                        st.info(meta.get('Refine_Content', ''))
-                        # [優化點 2] 讓後台資訊更透明
-                        source_tags = " | ".join(sources)
-                        st.caption(f"數據追蹤標籤: {source_tags} | 分數: {score:.3f} | ISBN: {meta.get('ISBN')}")
-                    st.divider()
+                with st.expander("💡 專家導讀"):
+                    st.info(meta.get('Refine_Content', ''))
+                    # [優化點 2] 讓後台資訊更透明
+                    source_tags = " | ".join(sources)
+                    st.caption(f"數據追蹤標籤: {source_tags} | 分數: {score:.3f} | ISBN: {meta.get('ISBN')}")
+                st.divider()
         
         
         # ================= 7. 分享功能與回饋區 =================
-        if final_display_list:
-            st.divider()
+        st.subheader("📤 儲存與分享本次報告")
+        
+        # --- 建立分享內容字串 ---
+        share_content = f"🌟 ibookle 專家選書報告 🌟\n"
+        share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
+        share_content += f"🔍 您諮詢的需求：{query}\n\n"
+        share_content += f"💡 專家分析建議：\n{report_text}\n\n"
+        share_content += f"📚 精選推薦書單：\n"
             
-            # --- 建立分享內容字串 ---
-            share_content = f"🌟 ibookle 專家選書報告 🌟\n"
-            share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
-            share_content += f"🔍 您諮詢的需求：{query}\n\n"
-            share_content += f"💡 專家分析建議：\n{report_text}\n\n"
-            share_content += f"📚 精選推薦書單：\n"
-            
-            for i, item in enumerate(final_display_list[:5], 1): # 只取前五名放入分享文
-                meta = item['doc'].metadata
-                share_content += f"{i}. 《{meta.get('Title','未知')}》\n"
-                share_content += f"   🔗 購書連結：{meta.get('書店連結', '無')}\n\n"
-            
-            share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
+        for i, item in enumerate(final_display_list[:5], 1): # 只取前五名放入分享文
+            meta = item['doc'].metadata
+            share_content += f"{i}. 《{meta.get('Title','未知')}》\n"
+            share_content += f"   🔗 購書連結：{meta.get('書店連結', '無')}\n\n"
+        share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
 
-            # --- 顯示分享功能區塊 ---
-            st.subheader("📤 儲存與分享本次報告")
-            col_copy, col_dl = st.columns(2)
+        # --- 顯示分享功能區塊 ---
+        col_copy, col_dl = st.columns(2)
             
-            with col_copy:
-                if st.button("📋 生成分享文字 (Line/FB)"):
-                    st.info("下方文字已準備好，您可以直接複製分享！")
-                    st.code(share_content, language=None)
-                    st.toast("報告已生成！", icon="✨")
+        with col_copy:
+            if st.button("📋 生成分享文字 (Line/FB)"):
+                st.info("下方文字已準備好，您可以直接複製分享！")
+                st.code(share_content, language=None)
+                st.toast("報告已生成！", icon="✨")
 
-            with col_dl:
-                st.download_button(
-                    label="📄 下載為專家建議報告 (.txt)",
-                    data=share_content,
-                    file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
-                    mime="text/plain"
-                )
+        with col_dl:
+            st.download_button(
+                label="📄 下載為專家建議報告 (.txt)",
+                data=share_content,
+                file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
+                mime="text/plain"
+            )
 
-            # --- 👍/👎 回饋區 ---
-            if st.session_state.last_row_idx:
-                st.write("---")
-                fb_key = f"fb_key_{st.session_state.last_row_idx}"
-                st.markdown('<div style="text-align: center;">', unsafe_allow_html=True)
-                st.write("🌟 這份建議對您有幫助嗎？")
-                # 使用 Streamlit 內建回饋組件
-                st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
-                st.markdown('</div>', unsafe_allow_html=True)
+        # --- 👍/👎 回饋區 ---
+        if st.session_state.last_row_idx:
+            st.write("---")
+            fb_key = f"fb_key_{st.session_state.last_row_idx}"
+            st.markdown('<div style="text-align: center;">', unsafe_allow_html=True)
+            st.write("🌟 這份建議對您有幫助嗎？")
+            # 使用 Streamlit 內建回饋組件
+            st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
+            st.markdown('</div>', unsafe_allow_html=True)
         
         
-        else:
-            st.warning("找不到結果。可能是篩選條件太嚴格，或是資料庫中沒有符合的書。")
+    else:
+        st.warning("找不到結果。可能是篩選條件太嚴格，或是資料庫中沒有符合的書。")
