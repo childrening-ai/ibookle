@@ -149,6 +149,28 @@ def save_to_log(user_input, ai_keywords, is_relaxed, ai_response, recommended_bo
     except:
         return None
 
+def update_log_feedback():
+    """處理 👍/👎 回饋並更新至 Google Sheet 的第 8 欄 (Feedback)"""
+    row_idx = st.session_state.last_row_idx
+    # 這裡的 key 必須對應下方 st.feedback 的 key
+    fb_key = f"fb_key_{row_idx}" 
+    
+    if row_idx and fb_key in st.session_state:
+        score = st.session_state[fb_key]
+        if score is not None:
+            try:
+                sheet = get_google_sheet()
+                # 轉換為文字符號存入第 8 欄
+                feedback_text = "👍" if score == 1 else "👎"
+                sheet.update_cell(row_idx, 8, feedback_text) 
+                
+                if score == 1:
+                    st.toast("感謝您的鼓勵！我們會繼續為您挑選好書。🌟", icon="❤️")
+                else:
+                    st.toast("感謝您的回饋，我們會持續進步。", icon="📝")
+            except Exception as e:
+                print(f"Feedback Update Error: {e}")
+
 # ================= 4. [新增] Layer 3: AI 意圖分析（更新20260217） =================
 def layer_3_analyze_intent(user_query, llm_model):
     # 整合了「實體保護」、「寬鬆檢索」與「50% 權重平衡」後的 System Prompt
@@ -745,5 +767,54 @@ if st.button("🔍 搜尋"):
                         source_tags = " | ".join(sources)
                         st.caption(f"數據追蹤標籤: {source_tags} | 分數: {score:.3f} | ISBN: {meta.get('ISBN')}")
                     st.divider()
+        
+        
+        # ================= 7. 分享功能與回饋區 =================
+        if final_display_list:
+            st.divider()
+            
+            # --- 建立分享內容字串 ---
+            share_content = f"🌟 ibookle 專家選書報告 🌟\n"
+            share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
+            share_content += f"🔍 您諮詢的需求：{query}\n\n"
+            share_content += f"💡 專家分析建議：\n{report_text}\n\n"
+            share_content += f"📚 精選推薦書單：\n"
+            
+            for i, item in enumerate(final_display_list[:5], 1): # 只取前五名放入分享文
+                meta = item['doc'].metadata
+                share_content += f"{i}. 《{meta.get('Title','未知')}》\n"
+                share_content += f"   🔗 購書連結：{meta.get('書店連結', '無')}\n\n"
+            
+            share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
+
+            # --- 顯示分享功能區塊 ---
+            st.subheader("📤 儲存與分享本次報告")
+            col_copy, col_dl = st.columns(2)
+            
+            with col_copy:
+                if st.button("📋 生成分享文字 (Line/FB)"):
+                    st.info("下方文字已準備好，您可以直接複製分享！")
+                    st.code(share_content, language=None)
+                    st.toast("報告已生成！", icon="✨")
+
+            with col_dl:
+                st.download_button(
+                    label="📄 下載為專家建議報告 (.txt)",
+                    data=share_content,
+                    file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
+                    mime="text/plain"
+                )
+
+            # --- 👍/👎 回饋區 ---
+            if st.session_state.last_row_idx:
+                st.write("---")
+                fb_key = f"fb_key_{st.session_state.last_row_idx}"
+                st.markdown('<div style="text-align: center;">', unsafe_allow_html=True)
+                st.write("🌟 這份建議對您有幫助嗎？")
+                # 使用 Streamlit 內建回饋組件
+                st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        
         else:
             st.warning("找不到結果。可能是篩選條件太嚴格，或是資料庫中沒有符合的書。")
