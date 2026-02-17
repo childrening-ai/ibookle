@@ -354,12 +354,19 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_
             expert_view = meta.get('Refine_Content', '這本書深受專家推薦。')
             
             if i <= 5:
-                # 前五名：詳細專家建議
                 core_materials += f"【書目{i}：{title}】專家導讀：{expert_view}\n"
             else:
-                # 剩餘書目：驚喜發現
                 surprise_materials += f"【發現：{title}】\n"
 
+        # --- [新增邏輯：動態生成驚喜區段指令] ---
+        surprise_section = ""
+        if surprise_materials:
+            surprise_section = f"""
+           ### 🎨 驚喜發現
+           - 簡單以一篇短文說明剩餘書籍的推薦原因，每本書名使用《》包裝：{surprise_materials}
+           - 短文格式：每本書名使用書名號《》包裝，每本書的特點用句號分隔。
+           - 短文約 100 字。
+           """
         # --- [Step 4: 結構化 Prompt 封裝] ---
         # 這裡包含您要求的 250 字短文指令與正向防火牆
         core_instructions = f"""
@@ -374,12 +381,7 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_
             3. **嚴格邊界**：僅限使用 {core_materials}。有多少寫多少，若只有一本則深入介紹該書。
             4. **字數控制**：這段文字總產出務必控制在 **200-250 字** 以內。
        
-           ### 🎨 驚喜發現
-           - 簡單以一篇短文簡短說明所有剩餘書籍的「特點」與推薦原因，每本書名使用書名號《》包裝：{surprise_materials}
-           - 短文格式：每本書名使用書名號《》包裝，每本書的特點用句號分隔
-           - 短文約 100 字
-           - 素材邊界：請「僅根據」提供的素材進行導讀。若 {surprise_materials} 內容不足或為空，請有多少寫多少，嚴禁自行編造或擴充資料庫以外的書目。
-           - 誠實反應：若素材中只有一本書，就請專注於那一本的精彩導讀。
+          {surprise_section}
         """
 
         # 根據是否模糊決定導讀模板
