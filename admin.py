@@ -203,7 +203,7 @@ if sheet:
     st.subheader("📝 詳細數據清單")
 
     # 定義顯示欄位順序 (中文欄位)
-    display_cols = ['序號', '時間', '原始提問', 'AI優化關鍵字', '專家建議內容', '推薦書單', '補書標記', 'Feedback']
+    display_cols = ['序號', '時間', 'SessionID', '原始提問', 'AI優化關鍵字', '專家建議內容', '推薦書單', '補書標記', 'Feedback']
 
     st.dataframe(
         filtered_df[display_cols],
@@ -212,6 +212,7 @@ if sheet:
         column_config={
             "序號": st.column_config.NumberColumn(width="small"),
             "時間": st.column_config.DatetimeColumn("時間", format="MM-DD HH:mm"),
+            "SessionID": st.column_config.TextColumn("Session ID", width="small"),
             "原始提問": st.column_config.TextColumn("家長提問", width="medium"),
             "AI優化關鍵字": st.column_config.TextColumn("AI 優化", width="small"),
             "專家建議內容": st.column_config.TextColumn("導讀報告", width="large"),
