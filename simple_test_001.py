@@ -569,10 +569,11 @@ with st.sidebar:
     st.caption("© 2026 ibookle")
 
 # --- [3. 這是原本的標題顯示] ---
-st.title("📚 ibookle 搜尋引擎 (Layer 5)")
-st.caption("Layer 3: AI 幫你拆解關鍵字與篩選條件")
+st.title("📚 ibookle 童書共讀小幫手")
+st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
+st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的主題，我會為你挑選最適合的童書。")
 
-query = st.text_input("輸入關鍵字 (試試：小一的恐龍漫畫、小孩做事拖拖拉拉)...", value="")
+user_query = st.text_input("", placeholder="🔍 請直接輸入關鍵字，像是想找天氣百科...", key="main_search")
 
 if st.button("🔍 搜尋"):
     if not query:
@@ -783,20 +784,20 @@ if st.session_state.get("search_performed"):
         
         
         # ================= 7. 分享功能與回饋區 =================
-        st.subheader("📤 儲存與分享本次報告")
+        st.subheader("📤 儲存與分享本次閱讀書單")
         
         # --- 建立分享內容字串 ---
-        share_content = f"🌟 ibookle 專家選書報告 🌟\n"
+        share_content = f"🌟 ibookle 書單 🌟\n"
         share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
         share_content += f"🔍 您諮詢的需求：{query}\n\n"
-        share_content += f"💡 專家分析建議：\n{report_text}\n\n"
-        share_content += f"📚 精選推薦書單：\n"
+        share_content += f"💡 ibookle 導讀：\n{report_text}\n\n"
+        share_content += f"📚 推薦書單：\n"
             
         for i, item in enumerate(final_display_list[:5], 1): # 只取前五名放入分享文
             meta = item['doc'].metadata
             share_content += f"{i}. 《{meta.get('Title','未知')}》\n"
-            share_content += f"   🔗 購書連結：{meta.get('書店連結', '無')}\n\n"
-        share_content += f"--- 分享自 ibookle AI 專家導讀系統 ---"
+            share_content += f"   🔗 博客來連結：{meta.get('書店連結', '無')}\n\n"
+        share_content += f"--- 分享自 ibookle 童書共讀小幫手 ---"
 
         # --- 顯示分享功能區塊 ---
         col_copy, col_dl = st.columns(2)
@@ -805,11 +806,11 @@ if st.session_state.get("search_performed"):
             if st.button("📋 生成分享文字 (Line/FB)"):
                 st.info("下方文字已準備好，您可以直接複製分享！")
                 st.code(share_content, language=None)
-                st.toast("報告已生成！", icon="✨")
+                st.toast("書單已生成！", icon="✨")
 
         with col_dl:
             st.download_button(
-                label="📄 下載為專家建議報告 (.txt)",
+                label="📄 下載書單 (.txt)",
                 data=share_content,
                 file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
                 mime="text/plain"
@@ -828,3 +829,6 @@ if st.session_state.get("search_performed"):
         
     else:
         st.warning("找不到結果。可能是篩選條件太嚴格，或是資料庫中沒有符合的書。")
+
+st.markdown("---")
+st.caption("© 2026 ibookle - 讓每一段共讀時光都更有意義")
