@@ -595,12 +595,15 @@ if st.button("🔍 搜尋"):
             extracted_filters = ai_analysis.get("filters", {})
             
             # [UI 顯示] 讓您看到 AI 到底做了什麼
-            with st.expander("🤖 查看 AI 大腦的分析結果", expanded=True):
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown(f"**🔍 優化後關鍵字**：\n`{refined_query}`")
-                with c2:
-                    st.markdown(f"**🛡️ 提取篩選條件**：\n`{extracted_filters}`")
+            # ==========================================
+            # 👇 就是下面這整段 st.expander，請把它刪除或註解掉 👇
+            # ==========================================
+            # with st.expander("🤖 查看 AI 大腦的分析結果", expanded=True):
+            #     c1, c2 = st.columns(2)
+            #     with c1:
+            #         st.markdown(f"**🔍 優化後關鍵字**：\n`{refined_query}`")
+            #     with c2:
+            #         st.markdown(f"**🛡️ 提取篩選條件**：\n`{extracted_filters}`")
 
             # --- [Step 3] Layer 4 執行搜尋 (帶入參數) ---
             semantic_results, is_relaxed_triggered = dual_track_search(
@@ -722,7 +725,7 @@ if st.session_state.get("search_performed"):
             except: 
                 rating = 0.0
 
-            # 圖片
+            # 圖片擷取邏輯 (保留變數不刪除，以免報錯，但畫面不畫出來)
             img_raw = str(meta.get('書封', ''))
             img_url = None
             if "http" in img_raw:
@@ -736,52 +739,53 @@ if st.session_state.get("search_performed"):
                 container.success(f"您似乎在找這本書？")
 
             with container:
-                col_img, col_info = st.columns([1, 4])
-                with col_img:
-                    if img_url: st.image(img_url, use_container_width=True)
-                    else: st.markdown("📷")
-                            
-                with col_info:
-                    c1, c2 = st.columns([4, 1])
-                    with c1:
-                        # =========== [修改開始] 標題顯示邏輯 ===========                                                    
-                        # 基礎標題字串
-                        title_display = f"### {rank}. 《{title}》"
-                            
-                        # 如果有高分評分，加個獎盃
-                        if rating >= 2.0: 
-                            title_display += " 🏆"
-
-                        if is_strict:
-                            # 1. 嚴格符合：正常顯示
-                            st.markdown(title_display)
-                        else:
-                            # 2. 放寬/延伸推薦：加上灰色小字標示，讓使用者知道為什麼它排在後面
-                            st.markdown(f"{title_display} <small style='color:gray; font-weight:normal'>(延伸推薦)</small>", unsafe_allow_html=True)
-                        # =========== [修改結束] ===========
-                    with c2:
-                        st.metric("關聯度", f"{score:.3f}")
-
-                    st.caption(f"**{author}** | {publisher} | {book_format}")
+                # 🚫 這裡已經移除了 col_img 與 col_info 的分欄，讓文字直接滿版！
+                
+                c1, c2 = st.columns([1, 0.01]) # 將 c2 設為極小
+                with c1:
+                    # =========== [修改開始] 標題顯示邏輯 ===========                                                    
+                    # 基礎標題字串
+                    title_display = f"### {rank}. 《{title}》"
                         
-                    tags = []
-                    if age_range and age_range!='nan': tags.append(f"👶 {age_range}")
-                    if "有注音" in str(pinyin_label): tags.append("✅ 有注音")
-                    if tags: st.markdown(" ".join([f"`{t}`" for t in tags]))
+                    # 如果有高分評分，加個獎盃
+                    if rating >= 2.0: 
+                        title_display += " 🏆"
 
-                    summary = meta.get('Quick_Summary', '')
-                    if str(summary)=='nan': summary="暫無"
-                    st.markdown(f"**📖 摘要**：{summary}")
-                    if link and str(link).startswith('http'):
-                        st.link_button("🛒 博客來連結", link)
-                        
+                    if is_strict:
+                        # 1. 嚴格符合：正常顯示
+                        st.markdown(title_display)
+                    else:
+                        # 2. 放寬/延伸推薦：加上灰色小字標示，讓使用者知道為什麼它排在後面
+                        st.markdown(f"{title_display} <small style='color:gray; font-weight:normal'>(延伸推薦)</small>", unsafe_allow_html=True)
+                    # =========== [修改結束] ===========
+                
+                # 隱藏 score 的顯示，但變數 score 依然存在
+                #with c2:
+                #    st.metric("關聯度", f"{score:.3f}")
+
+                st.caption(f"**{author}** | {publisher} | {book_format}")
+                    
+                tags = []
+                if age_range and age_range!='nan': tags.append(f"👶 {age_range}")
+                if "有注音" in str(pinyin_label): tags.append("✅ 有注音")
+                if tags: st.markdown(" ".join([f"`{t}`" for t in tags]))
+
+                summary = meta.get('Quick_Summary', '')
+                if str(summary)=='nan': summary="暫無"
+                st.markdown(f"**📖 摘要**：{summary}")
+                
+                if link and str(link).startswith('http'):
+                    st.link_button("🛒 博客來連結", link)
+                    
+                # 專家導讀區塊 (對齊外層的 container)
                 with st.expander("💡 共讀指引"):
                     st.info(meta.get('Refine_Content', ''))
                     # [優化點 2] 讓後台資訊更透明
                     source_tags = " | ".join(sources)
-                    st.caption(f"數據追蹤標籤: {source_tags} | 分數: {score:.3f} | ISBN: {meta.get('ISBN')}")
+                    # 註釋掉這行，家長就不會看到技術數據，但 Google Sheets 已經存好了
+                    #st.caption(f"數據追蹤標籤: {source_tags} | 分數: {score:.3f} | ISBN: {meta.get('ISBN')}")
+                
                 st.divider()
-        
         
         # ================= 7. 分享功能與回饋區 =================
         st.subheader("📤 儲存與分享本次閱讀書單")
