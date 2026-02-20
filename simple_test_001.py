@@ -571,9 +571,9 @@ with st.sidebar:
 # --- [3. 這是原本的標題顯示] ---
 st.title("📚 ibookle 童書共讀小幫手")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
-st.write("你好！我是你的共讀專家。輸入孩子的狀況或想找的主題，我會為你挑選最適合的童書。")
+st.write("你好！我是你的共讀小幫手。輸入想找的主題或是關鍵字，我會為你挑選適合的童書。")
 
-user_query = st.text_input("", placeholder="🔍 請直接輸入關鍵字，像是想找天氣百科...", key="main_search")
+query = st.text_input("", placeholder="🔍 請直接輸入關鍵字，像是想找天氣百科...", key="main_search")
 
 if st.button("🔍 搜尋"):
     if not query:
