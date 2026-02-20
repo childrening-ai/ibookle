@@ -399,7 +399,7 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_
 
         # --- [Step 2: 判定開場白 (補書預防針邏輯)] ---
         if is_relaxed_triggered:
-            intro_announcement = "目前完全符合需求的書較少，所以我額外推薦類似主題的優選書單，推薦給你和孩子嘗試看看。同時，我也會努力擴充書櫃，再麻煩您稍待。"
+            intro_announcement = "目前完全符合需求的書較少，所以我額外推薦類似主題的優選書單，推薦給您和孩子嘗試看看。同時，我也會努力擴充書櫃，再麻煩您稍待。"
         else:
             if top_score > 0.75:
                 intro_announcement = "這些是我為您與孩子挑選的優質好書，希望能符合您的需求。"
@@ -571,7 +571,7 @@ with st.sidebar:
 # --- [3. 這是原本的標題顯示] ---
 st.title("📚 ibookle 童書共讀小幫手")
 st.markdown("##### *為每一本好書，找到懂它的家長；為每一個孩子，挑選最好的陪伴。*")
-st.write("你好！我是你的共讀小幫手。輸入想找的主題或是關鍵字，我會為你挑選適合的童書。")
+st.write("您好！請輸入想找的主題或是關鍵字，我會挑選適合的童書以及分享共讀指引。")
 
 query = st.text_input("", placeholder="🔍 請直接輸入關鍵字，像是想找天氣百科...", key="main_search")
 
