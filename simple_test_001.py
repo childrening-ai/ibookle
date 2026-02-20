@@ -565,7 +565,7 @@ with st.sidebar:
     st.link_button("📝 填寫使用問卷", "https://childrening.pse.is/8jjrrl", use_container_width=True)
     
     st.divider()
-    st.caption(f"Session: {st.session_state.session_id}")
+    # st.caption(f"Session: {st.session_state.session_id}") 隱藏
     st.caption("© 2026 ibookle")
 
 # --- [3. 這是原本的標題顯示] ---
@@ -581,7 +581,7 @@ if st.button("🔍 搜尋"):
     else:
         final_display_list = []
         
-        with st.spinner("🧠 Layer 3: AI 正在分析您的意圖..."):
+        with st.spinner("🧠 ibookle 分析中，請稍待..."):
             # --- [Step 1] Layer 0 直通車 ---
             hit_result = layer_0_direct_hit(query)
             
