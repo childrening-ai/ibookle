@@ -562,7 +562,7 @@ with st.sidebar:
     st.subheader("📢 意見回饋")
     st.write("您的建議是我們進步的動力")
     # 請替換為您實際的問卷連結
-    st.link_button("📝 填寫使用問卷", "https://your-google-form-link", use_container_width=True)
+    st.link_button("📝 填寫使用問卷", "https://childrening.pse.is/8jjrrl", use_container_width=True)
     
     st.divider()
     st.caption(f"Session: {st.session_state.session_id}")
@@ -679,7 +679,7 @@ if st.session_state.get("search_performed"):
     query = st.session_state.res_query
     
     # 4. =========== [UI 導讀置頂顯示] ===========
-    st.markdown("### 🕊️ ibookle 的推薦書單")
+    st.markdown("### 🕊️ ibookle 的推薦書單與共讀指引")
     with st.chat_message("assistant"):
         st.write(report_text)            
     st.divider()
@@ -787,7 +787,7 @@ if st.session_state.get("search_performed"):
         st.subheader("📤 儲存與分享本次閱讀書單")
         
         # --- 建立分享內容字串 ---
-        share_content = f"🌟 ibookle 書單 🌟\n"
+        share_content = f"🌟 ibookle 閱讀書單 🌟\n"
         share_content += f"📅 日期：{datetime.date.today().strftime('%Y-%m-%d')}\n"
         share_content += f"🔍 您諮詢的需求：{query}\n\n"
         share_content += f"💡 ibookle 導讀：\n{report_text}\n\n"
@@ -821,7 +821,7 @@ if st.session_state.get("search_performed"):
             st.write("---")
             fb_key = f"fb_key_{st.session_state.last_row_idx}"
             st.markdown('<div style="text-align: center;">', unsafe_allow_html=True)
-            st.write("🌟 這份建議對您有幫助嗎？")
+            st.write("🌟 這份閱讀書單對您有幫助嗎？")
             # 使用 Streamlit 內建回饋組件
             st.feedback("thumbs", key=fb_key, on_change=update_log_feedback)
             st.markdown('</div>', unsafe_allow_html=True)
