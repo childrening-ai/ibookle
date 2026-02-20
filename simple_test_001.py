@@ -416,7 +416,7 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_
             expert_view = meta.get('Refine_Content', '這本書深受專家推薦。')
             
             if i <= 5:
-                core_materials += f"【書目{i}：{title}】專家導讀：{expert_view}\n"
+                core_materials += f"【書目{i}：{title}】共讀指引：{expert_view}\n"
             else:
                 surprise_materials += f"【發現：{title}】\n"
 
@@ -424,7 +424,7 @@ def layer_5_generate_report(user_query, ai_analysis, search_results, is_relaxed_
         surprise_section = ""
         if surprise_materials:
             surprise_section = f"""
-           ### 🎨 驚喜發現
+           ### 🎨 延伸推薦
            - 簡單以一篇短文說明剩餘書籍的推薦原因，每本書名使用《》包裝：{surprise_materials}
            - 短文格式：每本書名使用書名號《》包裝，每本書的特點用句號分隔。
            - 短文約 100 字。
@@ -679,7 +679,7 @@ if st.session_state.get("search_performed"):
     query = st.session_state.res_query
     
     # 4. =========== [UI 導讀置頂顯示] ===========
-    st.markdown("### 🕊️ ibookle 夥伴的共讀建議")
+    st.markdown("### 🕊️ ibookle 的推薦書單")
     with st.chat_message("assistant"):
         st.write(report_text)            
     st.divider()
@@ -773,9 +773,9 @@ if st.session_state.get("search_performed"):
                     if str(summary)=='nan': summary="暫無"
                     st.markdown(f"**📖 摘要**：{summary}")
                     if link and str(link).startswith('http'):
-                        st.link_button("🛒 博客來購書", link)
+                        st.link_button("🛒 博客來連結", link)
                         
-                with st.expander("💡 專家導讀"):
+                with st.expander("💡 共讀指引"):
                     st.info(meta.get('Refine_Content', ''))
                     # [優化點 2] 讓後台資訊更透明
                     source_tags = " | ".join(sources)
@@ -810,7 +810,7 @@ if st.session_state.get("search_performed"):
 
         with col_dl:
             st.download_button(
-                label="📄 下載書單 (.txt)",
+                label="📄 直接下載書單 (txt文字檔)",
                 data=share_content,
                 file_name=f"ibookle_report_{datetime.date.today().strftime('%m%d')}.txt",
                 mime="text/plain"
