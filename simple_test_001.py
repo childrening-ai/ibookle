@@ -749,8 +749,8 @@ if st.session_state.get("search_performed"):
                         
                     # 如果有高分評分，加個獎盃
                     if rating >= 2.0: 
-                        #title_display += "特別推薦 🏆"
-                        st.markdown(f"{title_display} <small style='color:gray; font-weight:normal'>(特別推薦 🏆)</small>", unsafe_allow_html=True)
+                        title_display += "｜精選 🏆"
+                        
 
                     if is_strict:
                         # 1. 嚴格符合：正常顯示
