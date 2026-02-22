@@ -626,9 +626,10 @@ if st.button("🔍 搜尋"):
                         break
                 
                 if not found_in_list:
-                    specific_book = dual_track_search(query, exact_title_filter=direct_hit_title)
+                    # 👇 [關鍵修正] 加上 ", _" 告訴 Python 我們只要第一個結果清單，忽略第二個放寬標記
+                    specific_book, _ = dual_track_search(query, exact_title_filter=direct_hit_title)
                     if specific_book: final_display_list.extend(specific_book)
-            
+
             final_display_list.extend(semantic_results)
 
         # --- [!!! 這裡開始植入數據準備與存檔邏輯 !!!] ---
