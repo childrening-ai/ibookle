@@ -632,47 +632,47 @@ if st.button("🔍 搜尋"):
 
             final_display_list.extend(semantic_results)
 
-        # --- [!!! 這裡開始植入數據準備與存檔邏輯 !!!] ---
-        if final_display_list:
-            # 1. 產出導讀報告 (Layer 5)
-            report_text = layer_5_generate_report(
-                user_query=query, 
-                ai_analysis=ai_analysis, 
-                search_results=final_display_list, 
-                is_relaxed_triggered=is_relaxed_triggered, 
-                llm_model=llm_brain
-            )
-            
-            # 2. 準備存入後台的詳細書單字串 (包含分數與標籤)
-            log_book_list = []
-            for item in final_display_list:
-                t = item['doc'].metadata.get('Title', '未知')
-                s = round(item['score'], 3)
-                is_strict = item.get('is_strict_match', True)
-                raw_sources = item.get('matched_via', [])
-                source_tag = " | ".join(raw_sources) if raw_sources else ("精準" if is_strict else "延伸")
-                log_book_list.append(f"{t}({s})[{source_tag}]")
-            
-            full_books_string = " ; ".join(log_book_list)
+            # --- [!!! 這裡開始植入數據準備與存檔邏輯 !!!] ---
+            if final_display_list:
+                # 1. 產出導讀報告 (Layer 5)
+                report_text = layer_5_generate_report(
+                    user_query=query, 
+                    ai_analysis=ai_analysis, 
+                    search_results=final_display_list, 
+                    is_relaxed_triggered=is_relaxed_triggered, 
+                    llm_model=llm_brain
+                )
+                
+                # 2. 準備存入後台的詳細書單字串 (包含分數與標籤)
+                log_book_list = []
+                for item in final_display_list:
+                    t = item['doc'].metadata.get('Title', '未知')
+                    s = round(item['score'], 3)
+                    is_strict = item.get('is_strict_match', True)
+                    raw_sources = item.get('matched_via', [])
+                    source_tag = " | ".join(raw_sources) if raw_sources else ("精準" if is_strict else "延伸")
+                    log_book_list.append(f"{t}({s})[{source_tag}]")
+                
+                full_books_string = " ; ".join(log_book_list)
 
-            # 3. 執行存檔至 Google Sheets
-            # 注意：這裡會將 last_row_idx 存入 Session，方便之後更新 👍/👎
-            st.session_state.last_row_idx = save_to_log(
-                user_input=query,
-                ai_keywords=refined_query,
-                is_relaxed=is_relaxed_triggered,
-                ai_response=report_text,
-                recommended_books=full_books_string
-            )
+                # 3. 執行存檔至 Google Sheets
+                # 注意：這裡會將 last_row_idx 存入 Session，方便之後更新 👍/👎
+                st.session_state.last_row_idx = save_to_log(
+                    user_input=query,
+                    ai_keywords=refined_query,
+                    is_relaxed=is_relaxed_triggered,
+                    ai_response=report_text,
+                    recommended_books=full_books_string
+                )
 
-            # --- [!!! 這裡植入：鎖定 Session State !!!] ---
-            # 確保運算結果被存入全域記憶區，不會因為頁面刷新而消失
-            st.session_state.search_performed = True
-            st.session_state.res_display_list = final_display_list
-            st.session_state.res_report_text = report_text
-            st.session_state.res_ai_analysis = ai_analysis
-            st.session_state.res_is_relaxed = is_relaxed_triggered
-            st.session_state.res_query = query
+                # --- [!!! 這裡植入：鎖定 Session State !!!] ---
+                # 確保運算結果被存入全域記憶區，不會因為頁面刷新而消失
+                st.session_state.search_performed = True
+                st.session_state.res_display_list = final_display_list
+                st.session_state.res_report_text = report_text
+                st.session_state.res_ai_analysis = ai_analysis
+                st.session_state.res_is_relaxed = is_relaxed_triggered
+                st.session_state.res_query = query
 
 # ================= [顯示邏輯區：這段不縮進，與 if st.button 平級] =================
 if st.session_state.get("search_performed"):
